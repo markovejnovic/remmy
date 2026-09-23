@@ -2,6 +2,13 @@
 
 The world's fastest `rm`.
 
+![Median time to delete the tree](.github/res/time.png)
+
+![Files deleted per second by thread count](.github/res/scaling.png)
+
+Reproduce with `uv run pytest tests/bench --bench=demo -p no:xdist` after
+building the release preset.
+
 # License
 
 Note this software is **not** open-source. The license for this code is
