@@ -21,6 +21,7 @@ dev = [
   "numpy>=2.5.3",
   "scipy>=1.18.1",
   "matplotlib>=3.11.2",
+  "ruff==0.16.4",
 ]
 
 [tool.uv]
@@ -33,7 +34,7 @@ timeout = 300
 markers = [
   "slow: large trees or long-running stress; deselect with -m 'not slow'",
   "differential: compares remmy's end state against /bin/rm on an identical tree",
-  "benchmark: opt-in comparison benchmark (pass --bench=demo|full|durability)",
+  "benchmark: opt-in comparison benchmark (pass --bench=demo or --bench=full)",
   "stress: race-prone; hammer with `-m stress --count N`",
   "filesystems: runs on scratch disk images of other filesystem types (macOS, hdiutil)",
 ]
@@ -46,3 +47,6 @@ REMMY_FAULTS = { unset = true }
 REMMY_FAULT_LOG = { unset = true }
 REMMY_FAULT_DT_UNKNOWN = { unset = true }
 DYLD_INSERT_LIBRARIES = { unset = true }
+
+[tool.ruff]
+line-length = 120

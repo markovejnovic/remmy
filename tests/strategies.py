@@ -10,11 +10,10 @@ import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from hypothesis import event, target
-from hypothesis import strategies as st
-
 import fstree
 from fstree import Special, Symlink
+from hypothesis import event, target
+from hypothesis import strategies as st
 
 NAME_MAX = 255
 
@@ -49,8 +48,6 @@ def fs_key(name: str) -> str:
 def _valid_name(caps: FsCaps, name: str) -> bool:
     if name in (".", "..") or len(name.encode()) > NAME_MAX:
         return False
-    if caps.nfd_names and unicodedata.normalize("NFD", name) != name:
-        return False
     if caps.dos_names:
         # Trailing dots and spaces are stripped, so the name would change.
         return name[-1] not in ". " and not any(c in _DOS_FORBIDDEN or c < " " for c in name)
@@ -59,7 +56,7 @@ def _valid_name(caps: FsCaps, name: str) -> bool:
 
 def names_for(caps: FsCaps) -> st.SearchStrategy[str]:
     """Any single path component the filesystem accepts."""
-    return st.text(
+    text = st.text(
         alphabet=st.characters(
             # Lone surrogates are not UTF-8; APFS rejects unassigned code points.
             blacklist_categories=("Cs", "Cn"),
@@ -67,7 +64,11 @@ def names_for(caps: FsCaps) -> st.SearchStrategy[str]:
         ),
         min_size=1,
         max_size=40,
-    ).filter(lambda n: _valid_name(caps, n))
+    )
+    if caps.nfd_names:
+        # Convert rather than filter: most generated text is not already NFD.
+        text = text.map(lambda n: unicodedata.normalize("NFD", n))
+    return text.filter(lambda n: _valid_name(caps, n))
 
 
 def trees_for(caps: FsCaps) -> st.SearchStrategy[fstree.Spec]:
@@ -88,9 +89,7 @@ def trees_for(caps: FsCaps) -> st.SearchStrategy[fstree.Spec]:
     leaves = st.one_of(kinds)
 
     def unique_dict(values: st.SearchStrategy[object]) -> st.SearchStrategy[fstree.Spec]:
-        return st.lists(
-            st.tuples(names, values), max_size=6, unique_by=lambda kv: fs_key(kv[0])
-        ).map(dict)
+        return st.lists(st.tuples(names, values), max_size=6, unique_by=lambda kv: fs_key(kv[0])).map(dict)
 
     return st.recursive(
         unique_dict(leaves),
@@ -126,7 +125,7 @@ def describe_tree(spec: fstree.Spec) -> None:
     Targets push generation toward what stresses remmy: deeper nesting (longer
     parent chains, deferred rmdir) and more directories (more scheduled tasks).
     """
-    depth, dirs, entries = tree_stats(spec)
+    depth, dirs, _ = tree_stats(spec)
     event(f"tree depth: {bucket(depth)}")
     event(f"tree directories: {bucket(dirs)}")
     target(float(depth), label="tree depth")

@@ -8,9 +8,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
-
 import fstree
+import pytest
 from fstree import Hardlink, Special, Symlink
 from oracle import RM, Recipe, compare_with_rm
 

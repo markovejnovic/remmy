@@ -134,9 +134,15 @@ class Fixture:
 
     def mktree_args(self) -> list[str]:
         return [
-            "--depth", str(self.depth), "--fanout", str(self.fanout),
-            "--files", str(self.files), "--size", str(self.size),
-        ]  # fmt: skip
+            "--depth",
+            str(self.depth),
+            "--fanout",
+            str(self.fanout),
+            "--files",
+            str(self.files),
+            "--size",
+            str(self.size),
+        ]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -175,7 +181,9 @@ class Sampling:
     """Untimed runs before each cell's timed runs in a round."""
 
     def __post_init__(self) -> None:
-        _require(self.reps >= 2 and self.reps % self.rounds == 0, f"reps {self.reps} must split over {self.rounds} rounds")
+        _require(
+            self.reps >= 2 and self.reps % self.rounds == 0, f"reps {self.reps} must split over {self.rounds} rounds"
+        )
 
     @property
     def per_round(self) -> int:

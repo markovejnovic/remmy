@@ -6,18 +6,15 @@ import errno
 import os
 from pathlib import Path
 
-import pytest
-from pytest_check import check
-
 import fstree
 import known_bugs
-from harness import Runner
+import pytest
 from fstree import Hardlink, Special, Symlink
+from harness import Runner
+from pytest_check import check
 
 
-def test_directory_without_recursive_is_refused_and_untouched(
-    run: Runner, workdir: Path
-) -> None:
+def test_directory_without_recursive_is_refused_and_untouched(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"d": {"f": "x", "e": {}}, "empty": {}})
     before = fstree.snapshot_dir(workdir)
 
@@ -85,9 +82,7 @@ def test_wide_directory(run: Runner, workdir: Path, threads: int) -> None:
 
 
 def test_many_sibling_directories(run: Runner, workdir: Path, threads: int) -> None:
-    fstree.build(
-        workdir, {"w": {f"d{i}": {"f": "", "g": {"h": ""}} for i in range(3_000)}}
-    )
+    fstree.build(workdir, {"w": {f"d{i}": {"f": "", "g": {"h": ""}} for i in range(3_000)}})
 
     res = run("-r", "w", threads=threads)
 
@@ -128,12 +123,8 @@ def test_deep_chain_within_path_max(run: Runner, workdir: Path, threads: int) ->
 # --- Containment: never escape the operand -----------------------------------
 
 
-def test_symlinks_inside_tree_are_never_followed(
-    run: Runner, workdir: Path, tmp_path: Path, threads: int
-) -> None:
-    outside = fstree.build(
-        tmp_path / "outside", {"file": "keep", "dir": {"nested": {"deep": "keep"}}}
-    )
+def test_symlinks_inside_tree_are_never_followed(run: Runner, workdir: Path, tmp_path: Path, threads: int) -> None:
+    outside = fstree.build(tmp_path / "outside", {"file": "keep", "dir": {"nested": {"deep": "keep"}}})
     fstree.build(workdir, {"sibling": {"s": "keep"}})
     fstree.build(
         workdir,
@@ -164,7 +155,9 @@ def test_symlinks_inside_tree_are_never_followed(
 
 
 def test_hard_links_leaving_the_tree_survive(run: Runner, workdir: Path) -> None:
-    fstree.build(workdir, {"outside": "shared", "t": {"a": Hardlink("../outside"), "d": {"b": Hardlink("../../outside")}}})
+    fstree.build(
+        workdir, {"outside": "shared", "t": {"a": Hardlink("../outside"), "d": {"b": Hardlink("../../outside")}}}
+    )
 
     res = run("-r", "t")
 

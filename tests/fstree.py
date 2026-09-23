@@ -104,6 +104,7 @@ class FileSnapshot:
 
 def snapshot_dir(root: Path) -> dict[str, FileSnapshot]:
     """Map every path under ``root`` (inclusive, as "") to its identity."""
+
     def _entry(st: os.stat_result, name: Path | str, dirfd: int | None) -> FileSnapshot:
         mode = st.st_mode
         digest = None

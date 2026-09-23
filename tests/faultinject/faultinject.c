@@ -12,7 +12,8 @@
 //                       FN        open openat unlink unlinkat rmdir lstat
 //                                 fstatat getdirentries
 //                       ERRNO     positive integer
-//                       SELECTOR  nth=N   fail only the Nth call to FN (1-based)
+//                       SELECTOR  nth=N   fail only the Nth call to FN
+//                       (1-based)
 //                                 from=N  fail the Nth call to FN and all later
 //                                 name=S  fail every call whose final path
 //                                         component is exactly S
@@ -57,7 +58,8 @@ enum Fn {
 };
 
 static const char* const kFnNames[kFnCount] = {
-    "open", "openat", "unlink", "unlinkat", "rmdir", "lstat", "fstatat", "getdirentries",
+    "open",  "openat", "unlink",  "unlinkat",
+    "rmdir", "lstat",  "fstatat", "getdirentries",
 };
 
 enum Selector { kNth, kFrom, kName, kAll };
@@ -80,7 +82,8 @@ static bool dt_unknown;
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 
 static void Die(const char* what) {
-  // Misconfiguration is a test bug: fail loudly instead of silently injecting nothing.
+  // Misconfiguration is a test bug: fail loudly instead of silently injecting
+  // nothing.
   (void)write(STDERR_FILENO, "faultinject: bad REMMY_FAULTS: ", 31);
   (void)write(STDERR_FILENO, what, strlen(what));
   (void)write(STDERR_FILENO, "\n", 1);
@@ -94,7 +97,8 @@ static void ParseRule(char* spec) {
   char* fn = strsep(&spec, ":");
   char* err = strsep(&spec, ":");
   char* sel = spec;
-  if (fn == NULL || err == NULL || sel == NULL) Die("expected FN:ERRNO:SELECTOR");
+  if (fn == NULL || err == NULL || sel == NULL)
+    Die("expected FN:ERRNO:SELECTOR");
 
   r->fn = kFnCount;
   for (int i = 0; i < kFnCount; ++i) {
@@ -186,17 +190,26 @@ static void Resolve(int dirfd, const char* name, char out[PATH_MAX]) {
 // Returns the errno to inject for this call, or 0 to let it through.
 static int Decide(enum Fn fn, int dirfd, const char* name) {
   pthread_once(&once, Init);
-  const long nth = atomic_fetch_add_explicit(&calls[fn], 1, memory_order_relaxed) + 1;
+  const long nth =
+      atomic_fetch_add_explicit(&calls[fn], 1, memory_order_relaxed) + 1;
 
   for (int i = 0; i < rule_count; ++i) {
     const struct Rule* r = &rules[i];
     if (r->fn != fn) continue;
     bool hit = false;
     switch (r->selector) {
-      case kAll: hit = true; break;
-      case kNth: hit = nth == r->n; break;
-      case kFrom: hit = nth >= r->n; break;
-      case kName: hit = strcmp(Basename(name), r->name) == 0; break;
+      case kAll:
+        hit = true;
+        break;
+      case kNth:
+        hit = nth == r->n;
+        break;
+      case kFrom:
+        hit = nth >= r->n;
+        break;
+      case kName:
+        hit = strcmp(Basename(name), r->name) == 0;
+        break;
     }
     if (!hit) continue;
 
@@ -204,8 +217,11 @@ static int Decide(enum Fn fn, int dirfd, const char* name) {
       char path[PATH_MAX];
       Resolve(dirfd, name, path);
       char line[PATH_MAX + 64];
-      int len = snprintf(line, sizeof line, "%s\t%d\t%s\n", kFnNames[fn], r->err, path);
-      if (len > 0) (void)write(log_fd, line, (size_t)len < sizeof line ? (size_t)len : sizeof line - 1);
+      int len = snprintf(line, sizeof line, "%s\t%d\t%s\n", kFnNames[fn],
+                         r->err, path);
+      if (len > 0)
+        (void)write(log_fd, line,
+                    (size_t)len < sizeof line ? (size_t)len : sizeof line - 1);
     }
     return r->err;
   }
@@ -288,7 +304,8 @@ static ssize_t FiGetdirentries(int fd, char* buf, size_t nbytes, off_t* basep) {
     // Byte-wise: records are not guaranteed to be aligned for struct dirent.
     for (ssize_t off = 0; off < n;) {
       uint16_t reclen;
-      memcpy(&reclen, buf + off + offsetof(struct dirent, d_reclen), sizeof reclen);
+      memcpy(&reclen, buf + off + offsetof(struct dirent, d_reclen),
+             sizeof reclen);
       if (reclen == 0) break;
       buf[off + (ssize_t)offsetof(struct dirent, d_type)] = DT_UNKNOWN;
       off += reclen;
@@ -297,11 +314,11 @@ static ssize_t FiGetdirentries(int fd, char* buf, size_t nbytes, off_t* basep) {
   return n;
 }
 
-#define INTERPOSE(replacement, original)                                            \
-  __attribute__((used)) static const struct {                                       \
-    const void* replacement_fn;                                                     \
-    const void* original_fn;                                                        \
-  } interpose_##original __attribute__((section("__DATA,__interpose"))) = {          \
+#define INTERPOSE(replacement, original)                                    \
+  __attribute__((used)) static const struct {                               \
+    const void* replacement_fn;                                             \
+    const void* original_fn;                                                \
+  } interpose_##original __attribute__((section("__DATA,__interpose"))) = { \
       (const void*)(uintptr_t)&replacement, (const void*)(uintptr_t)&original}
 
 INTERPOSE(FiOpen, open);

@@ -8,9 +8,8 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-
-from schema import Cell, Run, Summary  # noqa: E402
+import matplotlib.pyplot as plt
+from schema import Cell, Run, Summary
 
 
 def render(run: Run, summary: Summary, out: Path) -> list[Path]:
@@ -63,8 +62,14 @@ def _scaling(run: Run, cells: list[Cell], fixture: str, cache: str) -> plt.Figur
             swept[c.key.tool].append(c)
         else:
             ax.axhline(c.throughput_files_per_s, linestyle="--", color="gray")
-            ax.annotate(c.key.tool, (1, c.throughput_files_per_s), xycoords=("axes fraction", "data"),
-                        xytext=(4, 0), textcoords="offset points", va="center")  # fmt: skip
+            ax.annotate(
+                c.key.tool,
+                (1, c.throughput_files_per_s),
+                xycoords=("axes fraction", "data"),
+                xytext=(4, 0),
+                textcoords="offset points",
+                va="center",
+            )
     for tool, members in swept.items():
         members.sort(key=lambda c: c.key.threads)
         ax.plot([c.key.threads for c in members], [c.throughput_files_per_s for c in members], marker="o", label=tool)
@@ -82,9 +87,10 @@ def _scaling(run: Run, cells: list[Cell], fixture: str, cache: str) -> plt.Figur
 def _speedup_by_fixture(run: Run, summary: Summary) -> plt.Figure:
     default = 4 if 4 in run.plan.threads else max(run.plan.threads)
     pairs = [
-        p for p in summary.pairs
+        p
+        for p in summary.pairs
         if p.tool.cache == "warm" and (p.tool.threads == default or not run.plan.tool(p.tool.tool).sweeps_threads)
-    ]  # fmt: skip
+    ]
     fixtures = sorted({p.tool.fixture for p in pairs}, key=lambda f: int(f[1:]))
     tools = list(dict.fromkeys(p.tool.label for p in pairs))
     width = 0.8 / len(tools)

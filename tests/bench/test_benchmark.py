@@ -8,7 +8,6 @@ when the session ends.
 from __future__ import annotations
 
 import pytest
-
 import runner
 import schema
 from session import BenchSession
@@ -29,7 +28,12 @@ def test_matrix(bench: BenchSession, matrix: tuple[str, schema.Cache], request: 
 
     try:
         bench.samples += runner.run_matrix(
-            bench.plan, fixture, cache, bench.env, rng=bench.rng, progress=progress,
-        )  # fmt: skip
+            bench.plan,
+            fixture,
+            cache,
+            bench.env,
+            rng=bench.rng,
+            progress=progress,
+        )
     except runner.BenchmarkFailed as e:
         pytest.fail(str(e))

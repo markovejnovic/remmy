@@ -41,10 +41,7 @@ class Result:
         return [ln for ln in self.stderr.splitlines() if ln]
 
     def __str__(self) -> str:
-        return (
-            f"argv={self.argv!r} rc={self.returncode}\n"
-            f"--- stdout ---\n{self.stdout}\n--- stderr ---\n{self.stderr}"
-        )
+        return f"argv={self.argv!r} rc={self.returncode}\n--- stdout ---\n{self.stdout}\n--- stderr ---\n{self.stderr}"
 
 
 Runner = Callable[..., Result]

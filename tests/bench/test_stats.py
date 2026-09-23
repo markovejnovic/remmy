@@ -12,13 +12,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
-
 import registry
 import runner
 import schema
 import stats
+from hypothesis import given
+from hypothesis import strategies as st
 from schema import Cache, CellKey, Interval, Verdict
 
 RESAMPLES = 4000
@@ -142,7 +141,9 @@ def test_synthetic_run_recovers_planted_effects(demo_plan: schema.Plan) -> None:
     summary = stats.summarize(_synthetic_run(demo_plan, MEDIANS))
 
     verdicts = _verdicts(summary)
-    assert verdicts["remmy@4"] is Verdict.DISTINCT and summary.pair(CellKey("F0", "remmy", 4, Cache.WARM)).time_ratio < 1
+    assert (
+        verdicts["remmy@4"] is Verdict.DISTINCT and summary.pair(CellKey("F0", "remmy", 4, Cache.WARM)).time_ratio < 1
+    )
     assert verdicts["remmy@1"] is Verdict.TIE
     assert verdicts["xargs@1"] is Verdict.DISTINCT
 
@@ -172,9 +173,9 @@ def test_single_config_tools_never_sweep(demo_plan: schema.Plan) -> None:
 @pytest.mark.parametrize(
     "bad",
     [
-        dict(argv=("/bin/rm", "-rf")),  # no {tree}
-        dict(argv=("/bin/rm", "{tree}", "{oops}")),  # unknown placeholder
-        dict(argv=("a {tree}", "b"), shell=True),  # a shell tool is one string
+        {"argv": ("/bin/rm", "-rf")},  # no {tree}
+        {"argv": ("/bin/rm", "{tree}", "{oops}")},  # unknown placeholder
+        {"argv": ("a {tree}", "b"), "shell": True},  # a shell tool is one string
     ],
 )
 def test_tool_validation(bad: dict[str, object]) -> None:

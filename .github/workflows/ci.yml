@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install clang-format
+      - name: Check formatting
+        run: git ls-files '*.c' '*.h' '*.cpp' '*.hpp' | xargs clang-format --style=file --dry-run --Werror
+
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv run --locked ruff check tests
+      - run: uv run --locked ruff format --check tests
+
+  clang-tidy:
+    name: clang-tidy
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install llvm ninja
+      - name: Put Homebrew LLVM first on PATH
+        run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      # The lint preset compiles cutils with clang++ and runs clang-tidy on every
+      # translation unit; .clang-tidy makes every warning an error.
+      - run: cmake --preset lint
+      - run: cmake --build --preset lint
+
+  cutils:
+    name: cutils (${{ matrix.name }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GCC is the only compiler that builds the reflection tests.
+          - name: gcc asan
+            cxx: g++-16
+            tsan: "OFF"
+          # Clang adds integer, bounds and nullability checks.
+          - name: clang asan
+            cxx: clang++
+            tsan: "OFF"
+          - name: clang tsan
+            cxx: clang++
+            tsan: "ON"
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install gcc llvm ninja
+      - name: Put Homebrew LLVM first on PATH
+        run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      - name: Configure
+        run: >
+          cmake -S cutils -B build/cutils -G Ninja
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DCUTILS_TEST_TSAN=${{ matrix.tsan }}
+      - run: cmake --build build/cutils
+      - run: ctest --test-dir build/cutils --output-on-failure
+
+  remmy:
+    name: remmy (${{ matrix.preset }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install gcc ninja
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      # Runs the pytest end-to-end suite (tests/) against the built executable.
+      - run: ctest --preset ${{ matrix.preset }}

@@ -14,9 +14,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import pytest
-
 import environment
+import pytest
 import registry
 import runner
 import schema
@@ -85,8 +84,11 @@ def bench(pytestconfig: pytest.Config, tmp_path_factory: pytest.TempPathFactory)
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     out = pytestconfig.getoption("--bench-out") or REPO / "tests" / "bench" / "out" / f"{plan.name}-{stamp}"
     session = BenchSession(
-        plan=plan, env=env, out=out, rng=random.Random(plan.seed),
-    )  # fmt: skip
+        plan=plan,
+        env=env,
+        out=out,
+        rng=random.Random(plan.seed),
+    )
     pytestconfig.stash[BENCH_KEY] = session
     return session
 

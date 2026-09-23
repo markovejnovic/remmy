@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-from pytest_check import check
-
 import fstree
+import pytest
 from harness import Runner
+from pytest_check import check
 
 
 @pytest.mark.parametrize("flag", ["-h", "--help"])
@@ -60,9 +59,7 @@ def test_recursive_flag_alone_is_a_successful_noop(run: Runner, workdir: Path) -
 
 
 @pytest.mark.parametrize("bogus", ["--bogus", "-z", "--recursive=yes", "-rz"])
-def test_unknown_option_fails_before_touching_anything(
-    run: Runner, workdir: Path, bogus: str
-) -> None:
+def test_unknown_option_fails_before_touching_anything(run: Runner, workdir: Path, bogus: str) -> None:
     fstree.build(workdir, {"victim": "x", "tree": {"f": "y"}})
     before = fstree.snapshot_dir(workdir)
 
@@ -80,9 +77,7 @@ def test_unknown_option_fails_before_touching_anything(
 
 @pytest.mark.parametrize("spelling", ["-r", "--recursive"])
 @pytest.mark.parametrize("position", ["first", "last"])
-def test_recursive_flag_spelling_and_position(
-    run: Runner, workdir: Path, spelling: str, position: str
-) -> None:
+def test_recursive_flag_spelling_and_position(run: Runner, workdir: Path, spelling: str, position: str) -> None:
     fstree.build(workdir, {"a": {"b": {"c": "x"}}, "f": "y"})
     args = ["a", "f"]
     args = [spelling, *args] if position == "first" else [*args, spelling]

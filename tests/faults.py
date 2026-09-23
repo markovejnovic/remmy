@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
 from harness import Result, run_remmy
 
 SOURCE = Path(__file__).parent / "faultinject" / "faultinject.c"
@@ -73,9 +72,7 @@ def run_with_faults(
     log = Path(name)
     env = {
         # Append so a sanitizer runtime that also uses DYLD_INSERT_LIBRARIES keeps working.
-        "DYLD_INSERT_LIBRARIES": ":".join(
-            p for p in (str(lib), os.environ.get("DYLD_INSERT_LIBRARIES", "")) if p
-        ),
+        "DYLD_INSERT_LIBRARIES": ":".join(p for p in (str(lib), os.environ.get("DYLD_INSERT_LIBRARIES", "")) if p),
         "REMMY_FAULTS": ";".join(map(str, faults)),
         "REMMY_FAULT_LOG": str(log),
         "REMMY_FAULT_DT_UNKNOWN": "1" if dt_unknown else "0",

@@ -5,12 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
-from pytest_check import check
-
 import fstree
+import pytest
 from harness import Runner
 from known_bugs import GIVES_UP_ON_EMFILE_UNDER_CONTENTION, PATH_MAX_EXCEEDED
+from pytest_check import check
 
 # macOS PATH_MAX; Linux is 4096. Chains below exceed both.
 PATH_MAX = os.pathconf("/", "PC_PATH_MAX")
@@ -38,9 +37,7 @@ def test_wide_tree_under_tight_fd_limit(
 
 @pytest.mark.stress
 @pytest.mark.parametrize("fd_limit", [12, 24])
-def test_deep_tree_under_tight_fd_limit(
-    run: Runner, workdir: Path, fd_limit: int, threads: int
-) -> None:
+def test_deep_tree_under_tight_fd_limit(run: Runner, workdir: Path, fd_limit: int, threads: int) -> None:
     """Depth far beyond the fd budget: ancestors cannot all stay open."""
     fstree.deep_chain(workdir / "t", depth=300, name="d", leaf_files=2)
 
@@ -72,9 +69,7 @@ def test_starved_fd_limit_fails_cleanly(run: Runner, workdir: Path) -> None:
 @PATH_MAX_EXCEEDED
 @pytest.mark.slow
 @pytest.mark.parametrize("multiple", [2, 5])
-def test_tree_deeper_than_path_max(
-    run: Runner, workdir: Path, threads: int, multiple: int
-) -> None:
+def test_tree_deeper_than_path_max(run: Runner, workdir: Path, threads: int, multiple: int) -> None:
     name = "n" * 50
     depth = (PATH_MAX * multiple) // (len(name) + 1)
     length = fstree.deep_chain(workdir / "t", depth=depth, name=name, leaf_files=1)

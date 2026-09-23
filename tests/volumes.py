@@ -108,8 +108,19 @@ def mounted(fs: str, workdir: Path, size: str = "512m") -> Iterator[Volume]:
     image = workdir / f"{fs.replace(' ', '_')}.sparseimage"
     mountpoint = workdir / f"{fs.replace(' ', '_')}.mnt"
     mountpoint.mkdir()
-    _hdiutil("create", "-quiet", "-size", size, "-type", "SPARSE", "-fs", fs,
-             "-volname", "remmy-test", str(image.with_suffix("")))
+    _hdiutil(
+        "create",
+        "-quiet",
+        "-size",
+        size,
+        "-type",
+        "SPARSE",
+        "-fs",
+        fs,
+        "-volname",
+        "remmy-test",
+        str(image.with_suffix("")),
+    )
     _hdiutil("attach", "-quiet", "-nobrowse", "-noautoopen", "-mountpoint", str(mountpoint), str(image))
     try:
         caps, case_sensitive, permissions = _probe(mountpoint)

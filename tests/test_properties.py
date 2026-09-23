@@ -10,14 +10,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import fstree
 import pytest
+import strategies
+from fstree import Symlink
+from harness import run_remmy
 from hypothesis import event, example, given, target
 from hypothesis import strategies as st
-
-import fstree
-import strategies
-from harness import run_remmy
-from fstree import Symlink
 from oracle import RM, compare_with_rm
 
 
@@ -36,9 +35,7 @@ def base(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @example(name="-r", is_dir=True, separator="--")
 @example(name="--help", is_dir=False, separator="--")
 @example(name="nl\n", is_dir=True, separator="./")
-def test_any_name_is_removable(
-    remmy_bin: Path, base: Path, name: str, is_dir: bool, separator: str
-) -> None:
+def test_any_name_is_removable(remmy_bin: Path, base: Path, name: str, is_dir: bool, separator: str) -> None:
     with fstree.scratch(base) as d:
         work = fstree.build(d / "work", {name: {name: "x"} if is_dir else "x"})
         fstree.build(d, {"keep": ""})
@@ -51,9 +48,7 @@ def test_any_name_is_removable(
 
 
 @given(tree=strategies.trees, threads=st.integers(1, 16))
-def test_any_tree_is_removed_without_escaping(
-    remmy_bin: Path, base: Path, tree: fstree.Spec, threads: int
-) -> None:
+def test_any_tree_is_removed_without_escaping(remmy_bin: Path, base: Path, tree: fstree.Spec, threads: int) -> None:
     strategies.describe_tree(tree)
     event(f"threads: {strategies.bucket(threads)}")
     with fstree.scratch(base) as d:

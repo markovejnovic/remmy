@@ -8,11 +8,10 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-import pytest
-from pytest_check import check
-
 import fstree
+import pytest
 from harness import RUN_TIMEOUT
+from pytest_check import check
 
 pytestmark = pytest.mark.stress
 
@@ -28,9 +27,7 @@ def _finish(p: subprocess.Popen[bytes]) -> tuple[int, str]:
 
 
 @pytest.mark.parametrize("copies", [2, 4])
-def test_parallel_invocations_on_the_same_tree(
-    spawn: Spawn, workdir: Path, copies: int
-) -> None:
+def test_parallel_invocations_on_the_same_tree(spawn: Spawn, workdir: Path, copies: int) -> None:
     fstree.build(
         workdir,
         {"t": {f"d{i}": {f"e{j}": {f"f{k}": "" for k in range(10)} for j in range(10)} for i in range(30)}},
@@ -104,9 +101,7 @@ def test_tree_removed_underneath_by_another_process(spawn: Spawn, workdir: Path)
         assert not fstree.exists(workdir / "t")
 
 
-def test_operand_replaced_by_symlink_after_start_does_not_escape(
-    spawn: Spawn, workdir: Path, tmp_path: Path
-) -> None:
+def test_operand_replaced_by_symlink_after_start_does_not_escape(spawn: Spawn, workdir: Path, tmp_path: Path) -> None:
     outside = fstree.build(tmp_path / "outside", {f"f{i}": "keep" for i in range(50)})
     before = fstree.snapshot_dir(outside)
     fstree.build(workdir, {"t": {f"d{i}": {f"f{j}": "" for j in range(20)} for i in range(200)}})

@@ -13,9 +13,8 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 
 import numpy as np
-from scipy import stats as sp
-
 from schema import Cache, Cell, CellKey, DecisionRule, Interval, Pair, Run, Sample, Summary
+from scipy import stats as sp
 
 Array = np.ndarray
 
@@ -111,10 +110,12 @@ def summarize(run: Run) -> Summary:
         median = float(np.median(seconds))
         cells.append(
             Cell(
-                key=key, n=len(members), median_seconds=median,
+                key=key,
+                n=len(members),
+                median_seconds=median,
                 median_ci95=median_ci(seconds, resamples=plan.bootstrap_resamples, seed=plan.seed),
                 throughput_files_per_s=plan.fixture(key.fixture).expected.files / median,
-            )  # fmt: skip
+            )
         )
     return Summary(cells=tuple(cells), pairs=tuple(_pairs(run, by_cell, plan.rule)))
 
@@ -140,9 +141,12 @@ def _pairs(run: Run, by_cell: dict[CellKey, list[Sample]], rule: DecisionRule) -
         for (key, ref_key, ratio, ratio_ci, _p, delta), adj in zip(family, holm([f[4] for f in family]), strict=True):
             pairs.append(
                 Pair(
-                    tool=key, reference=ref_key, time_ratio=ratio, time_ratio_ci95=ratio_ci,
+                    tool=key,
+                    reference=ref_key,
+                    time_ratio=ratio,
+                    time_ratio_ci95=ratio_ci,
                     verdict=rule.decide(ratio_ci, delta, adj),
-                )  # fmt: skip
+                )
             )
     return sorted(pairs, key=lambda p: p.tool)
 
@@ -156,4 +160,3 @@ def headline(summary: Summary) -> Iterable[str]:
             f"{p.tool.fixture}/{p.tool.cache} {p.tool.label:<10} {p.time_ratio:.3f}x {p.reference.label}'s time"
             f" [95% CI {ci.lo:.3f}, {ci.hi:.3f}]  {speed} ({p.verdict})"
         )
-

@@ -6,12 +6,11 @@ import errno
 import os
 from pathlib import Path
 
-import pytest
-from pytest_check import check
-
 import fstree
-from harness import Runner
+import pytest
 from fstree import Hardlink, Special, Symlink
+from harness import Runner
+from pytest_check import check
 
 
 @pytest.mark.parametrize("recursive", [False, True], ids=["plain", "-r"])
@@ -26,9 +25,7 @@ from fstree import Hardlink, Special, Symlink
         pytest.param(Symlink("victim"), id="self-symlink"),
     ],
 )
-def test_removes_each_inode_type(
-    run: Runner, workdir: Path, node: object, recursive: bool
-) -> None:
+def test_removes_each_inode_type(run: Runner, workdir: Path, node: object, recursive: bool) -> None:
     fstree.build(workdir, {"victim": node, "keep": "k"})
 
     res = run(*(["-r"] if recursive else []), "victim")
@@ -77,9 +74,7 @@ def test_symlink_to_file_removes_link_not_target(run: Runner, workdir: Path) -> 
 
 
 @pytest.mark.parametrize("recursive", [False, True], ids=["plain", "-r"])
-def test_symlink_to_directory_removes_only_the_link(
-    run: Runner, workdir: Path, recursive: bool
-) -> None:
+def test_symlink_to_directory_removes_only_the_link(run: Runner, workdir: Path, recursive: bool) -> None:
     fstree.build(workdir, {"real": {"a": "1", "sub": {"b": "2"}}, "link": Symlink("real")})
     before = fstree.snapshot_dir(workdir / "real")
 
@@ -93,9 +88,7 @@ def test_symlink_to_directory_removes_only_the_link(
         assert fstree.snapshot_dir(workdir / "real") == before
 
 
-def test_symlink_with_absolute_target_outside_workdir(
-    run: Runner, workdir: Path, tmp_path: Path
-) -> None:
+def test_symlink_with_absolute_target_outside_workdir(run: Runner, workdir: Path, tmp_path: Path) -> None:
     outside = fstree.build(tmp_path / "outside", {"x": "keep me", "d": {"y": "and me"}})
     before = fstree.snapshot_dir(outside)
     os.symlink(outside, workdir / "abs")
@@ -227,9 +220,7 @@ def test_trailing_slash_on_file_is_not_a_directory(run: Runner, workdir: Path) -
         assert (workdir / "f").read_text() == "keep"
 
 
-def test_file_in_unwritable_directory_is_reported(
-    run: Runner, workdir: Path, is_root: bool
-) -> None:
+def test_file_in_unwritable_directory_is_reported(run: Runner, workdir: Path, is_root: bool) -> None:
     if is_root:
         pytest.skip("root bypasses directory write permission")
     fstree.build(workdir, {"locked": {"f": "x"}})
@@ -247,9 +238,7 @@ def test_file_in_unwritable_directory_is_reported(
         assert fstree.exists(workdir / "locked/f")
 
 
-def test_path_through_unsearchable_directory_is_reported(
-    run: Runner, workdir: Path, is_root: bool
-) -> None:
+def test_path_through_unsearchable_directory_is_reported(run: Runner, workdir: Path, is_root: bool) -> None:
     if is_root:
         pytest.skip("root bypasses directory search permission")
     fstree.build(workdir, {"locked": {"f": "x"}})

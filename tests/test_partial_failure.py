@@ -11,11 +11,10 @@ import errno
 import os
 from pathlib import Path
 
-import pytest
-from pytest_check import check
-
 import fstree
+import pytest
 from harness import Runner
+from pytest_check import check
 
 
 @pytest.fixture(autouse=True)
@@ -66,9 +65,7 @@ def test_unwritable_subdirectory_keeps_its_files(run: Runner, workdir: Path, thr
         assert "t/frozen" in res.stderr
 
 
-def test_failure_deep_in_tree_preserves_exact_ancestor_chain(
-    run: Runner, workdir: Path, threads: int
-) -> None:
+def test_failure_deep_in_tree_preserves_exact_ancestor_chain(run: Runner, workdir: Path, threads: int) -> None:
     fstree.build(
         workdir,
         {
@@ -112,9 +109,7 @@ def test_many_scattered_failures_all_reported(run: Runner, workdir: Path, thread
             assert not fstree.exists(workdir / f"t/d{i}/free")
 
 
-def test_unremovable_operand_does_not_affect_other_operands(
-    run: Runner, workdir: Path, threads: int
-) -> None:
+def test_unremovable_operand_does_not_affect_other_operands(run: Runner, workdir: Path, threads: int) -> None:
     fstree.build(workdir, {"bad": {"locked": {"x": ""}}, "good1": {"a": {"b": ""}}, "good2": ""})
 
     with fstree.chmod(workdir / "bad/locked", 0o000):

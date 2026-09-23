@@ -10,16 +10,15 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-import pytest
-from hypothesis import given
-from hypothesis import strategies as st
-from pytest_check import check
-
 import fstree
+import pytest
 import strategies
 import volumes
 from harness import run_remmy
+from hypothesis import given
+from hypothesis import strategies as st
 from oracle import compare_with_rm
+from pytest_check import check
 
 pytestmark = pytest.mark.filesystems
 
@@ -61,9 +60,7 @@ def test_any_operand_list_matches_rm(remmy_bin: Path, volume: volumes.Volume, da
     recursive = data.draw(st.booleans(), label="recursive")
 
     with fstree.scratch(volume.root) as d:
-        compare_with_rm(
-            remmy_bin, d, lambda r: fstree.build(r, top), [*(["-r"] if recursive else []), "--", *operands]
-        )
+        compare_with_rm(remmy_bin, d, lambda r: fstree.build(r, top), [*(["-r"] if recursive else []), "--", *operands])
 
 
 def test_wide_and_deep(remmy_bin: Path, volume: volumes.Volume) -> None:
@@ -109,9 +106,7 @@ def test_case_insensitive_operand_spelling(remmy_bin: Path, volume: volumes.Volu
 
 @pytest.mark.differential
 @given(data=st.data())
-def test_partial_failures_match_rm(
-    remmy_bin: Path, volume: volumes.Volume, is_root: bool, data: st.DataObject
-) -> None:
+def test_partial_failures_match_rm(remmy_bin: Path, volume: volumes.Volume, is_root: bool, data: st.DataObject) -> None:
     if not volume.permissions or is_root:
         pytest.skip("permissions are not enforced here")
     tree = data.draw(strategies.trees_for(volume.caps), label="tree")

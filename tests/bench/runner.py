@@ -46,9 +46,7 @@ def run_matrix(
     return samples
 
 
-def _time_cell(
-    plan: Plan, fixture: Fixture, cell: CellKey, env: Environment, *, runs: int, warmup: int
-) -> list[float]:
+def _time_cell(plan: Plan, fixture: Fixture, cell: CellKey, env: Environment, *, runs: int, warmup: int) -> list[float]:
     work = env.scratch / f"{cell.fixture}-{cell.cache}-{cell.tool}-{cell.threads}"
     work.mkdir(parents=True, exist_ok=True)
     tree, state, export = work / "tree", work / "state.json", work / "hyperfine.json"
@@ -58,16 +56,26 @@ def _time_cell(
         prepare.append("--purge")
     prepare += ["--", *fixture.mktree_args()]
     command = [
-        env.hyperfine, "--shell=none", "--style=none",
-        "--runs", str(runs), "--warmup", str(warmup),
-        "--prepare", shlex.join(prepare),
-        "--export-json", str(export),
-        "--command-name", str(cell),
+        env.hyperfine,
+        "--shell=none",
+        "--style=none",
+        "--runs",
+        str(runs),
+        "--warmup",
+        str(warmup),
+        "--prepare",
+        shlex.join(prepare),
+        "--export-json",
+        str(export),
+        "--command-name",
+        str(cell),
         shlex.join(plan.tool(cell.tool).argv_for(tree, cell.threads)),
-    ]  # fmt: skip
+    ]
     done = subprocess.run(command, capture_output=True, text=True, check=False)
     if done.returncode != 0:
-        raise BenchmarkFailed(f"{cell}: hyperfine exited {done.returncode}\n{done.stderr.strip() or done.stdout.strip()}")
+        raise BenchmarkFailed(
+            f"{cell}: hyperfine exited {done.returncode}\n{done.stderr.strip() or done.stdout.strip()}"
+        )
 
     (result,) = json.loads(export.read_text())["results"]
     built = TreeCounts(**json.loads(state.read_text()))

@@ -11,16 +11,15 @@ import errno
 import os
 from pathlib import Path
 
-import pytest
-from hypothesis import assume, event, given, target
-from hypothesis import strategies as st
-from pytest_check import check
-
 import fstree
+import pytest
 import strategies
 from faults import Fault, Injection, run_with_faults
 from fstree import Special, Symlink
+from hypothesis import assume, event, given, target
+from hypothesis import strategies as st
 from known_bugs import SWALLOWED_UNLINK_ERROR, UNCLASSIFIED_ENTRY_TREATED_AS_FILE
+from pytest_check import check
 
 
 def _tree(root: Path) -> Path:
@@ -47,13 +46,15 @@ def _rel(p: Path, root: Path) -> str:
 
 
 @SWALLOWED_UNLINK_ERROR
-def test_failed_unlink_is_reported_by_name(
-    remmy_bin: Path, faultlib: Path, workdir: Path, threads: int
-) -> None:
+def test_failed_unlink_is_reported_by_name(remmy_bin: Path, faultlib: Path, workdir: Path, threads: int) -> None:
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir, threads=threads,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
+        threads=threads,
         faults=[Fault("unlinkat", errno.EIO, "name=victim")],
     )
 
@@ -68,13 +69,15 @@ def test_failed_unlink_is_reported_by_name(
         assert fstree.listing(workdir) == {"t", "t/a", "t/a/victim"}
 
 
-def test_failed_rmdir_is_reported_by_name(
-    remmy_bin: Path, faultlib: Path, workdir: Path, threads: int
-) -> None:
+def test_failed_rmdir_is_reported_by_name(remmy_bin: Path, faultlib: Path, workdir: Path, threads: int) -> None:
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir, threads=threads,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
+        threads=threads,
         faults=[Fault("rmdir", errno.EBUSY, "name=b")],
     )
 
@@ -94,7 +97,10 @@ def test_failed_subdirectory_open_skips_only_that_subtree(
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
         faults=[Fault("openat", err, "name=a")],
     )
 
@@ -112,7 +118,10 @@ def test_failed_operand_open(remmy_bin: Path, faultlib: Path, workdir: Path) -> 
     fstree.build(workdir, {"other": {"f": ""}})
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t", "other"], cwd=workdir,
+        remmy_bin,
+        faultlib,
+        ["-r", "t", "other"],
+        cwd=workdir,
         faults=[Fault("open", errno.EIO, "name=t")],
     )
 
@@ -131,7 +140,10 @@ def test_failed_operand_lstat(remmy_bin: Path, faultlib: Path, workdir: Path) ->
     fstree.build(workdir, {"f": "", "g": ""})
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["f", "g"], cwd=workdir,
+        remmy_bin,
+        faultlib,
+        ["f", "g"],
+        cwd=workdir,
         faults=[Fault("lstat", errno.EIO, "name=f")],
     )
 
@@ -148,7 +160,10 @@ def test_failed_top_level_unlink(remmy_bin: Path, faultlib: Path, workdir: Path)
     fstree.build(workdir, {"f": "", "g": ""})
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["f", "g"], cwd=workdir,
+        remmy_bin,
+        faultlib,
+        ["f", "g"],
+        cwd=workdir,
         faults=[Fault("unlink", errno.EPERM, "name=f")],
     )
 
@@ -162,13 +177,14 @@ def test_failed_top_level_unlink(remmy_bin: Path, faultlib: Path, workdir: Path)
 
 
 @pytest.mark.parametrize("selector", ["nth=1", "nth=2", "all"])
-def test_failed_directory_read_is_reported(
-    remmy_bin: Path, faultlib: Path, workdir: Path, selector: str
-) -> None:
+def test_failed_directory_read_is_reported(remmy_bin: Path, faultlib: Path, workdir: Path, selector: str) -> None:
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
         faults=[Fault("getdirentries", errno.EIO, selector)],
     )
 
@@ -194,7 +210,11 @@ def test_transient_fd_exhaustion_is_retried(
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir, threads=threads,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
+        threads=threads,
         faults=[Fault("openat", err, selector)],
     )
 
@@ -214,7 +234,11 @@ def test_permanent_openat_exhaustion_falls_back_to_paths(
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir, threads=threads,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
+        threads=threads,
         faults=[Fault("openat", errno.EMFILE, "all")],
     )
 
@@ -234,7 +258,11 @@ def test_permanent_exhaustion_terminates_with_an_error(
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir, threads=threads,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
+        threads=threads,
         faults=[Fault(fn, errno.EMFILE, "all") for fn in fns],
     )
 
@@ -248,13 +276,16 @@ def test_permanent_exhaustion_terminates_with_an_error(
 # --- Filesystems that do not report entry types ------------------------------
 
 
-def test_unknown_entry_types_fall_back_to_stat(
-    remmy_bin: Path, faultlib: Path, workdir: Path, threads: int
-) -> None:
+def test_unknown_entry_types_fall_back_to_stat(remmy_bin: Path, faultlib: Path, workdir: Path, threads: int) -> None:
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir, threads=threads, dt_unknown=True,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
+        threads=threads,
+        dt_unknown=True,
     )
 
     assert hit == []
@@ -265,13 +296,15 @@ def test_unknown_entry_types_fall_back_to_stat(
 
 
 @UNCLASSIFIED_ENTRY_TREATED_AS_FILE
-def test_failed_fallback_stat_is_reported(
-    remmy_bin: Path, faultlib: Path, workdir: Path
-) -> None:
+def test_failed_fallback_stat_is_reported(remmy_bin: Path, faultlib: Path, workdir: Path) -> None:
     _tree(workdir)
 
     res, hit = run_with_faults(
-        remmy_bin, faultlib, ["-r", "t"], cwd=workdir, dt_unknown=True,
+        remmy_bin,
+        faultlib,
+        ["-r", "t"],
+        cwd=workdir,
+        dt_unknown=True,
         faults=[Fault("fstatat", errno.EIO, "name=a")],
     )
 
@@ -330,7 +363,12 @@ def test_any_single_failure_is_contained_and_reported(
         fstree.build(d / "t", tree)
 
         res, hit = run_with_faults(
-            remmy_bin, faultlib, ["-r", "t"], cwd=d, threads=threads, dt_unknown=dt_unknown,
+            remmy_bin,
+            faultlib,
+            ["-r", "t"],
+            cwd=d,
+            threads=threads,
+            dt_unknown=dt_unknown,
             faults=[Fault(fn, err, f"nth={nth}")],
         )
 

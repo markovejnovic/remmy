@@ -13,16 +13,13 @@ import threading
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
+import fstree
 import pytest
+from harness import Result, Runner, run_remmy
 from hypothesis import HealthCheck, settings
 
-import fstree
-from harness import Result, Runner, run_remmy
-
 # Each example spawns processes and builds trees: no per-example deadline.
-settings.register_profile(
-    "default", max_examples=60, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-)
+settings.register_profile("default", max_examples=60, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 settings.register_profile("thorough", parent=settings.get_profile("default"), max_examples=1000)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
@@ -51,9 +48,7 @@ def pytest_configure(config: pytest.Config) -> None:
         _icdiff_compare = plugin.pytest_assertrepr_compare
 
 
-def pytest_assertrepr_compare(
-    config: pytest.Config, op: str, left: object, right: object
-) -> list[str] | None:
+def pytest_assertrepr_compare(config: pytest.Config, op: str, left: object, right: object) -> list[str] | None:
     """Explain ``==`` failures, compactly for large values.
 
     Tree listings hold thousands of paths and remmy's stderr can run to
@@ -176,8 +171,12 @@ def root(pytestconfig: pytest.Config) -> Iterator[None]:
             with capture.global_and_fixture_disabled():
                 subprocess.run(
                     ["sudo", "-v", "-p", "\n[remmy tests] root needed; sudo password for %u: "],
-                    stdin=tty, stdout=tty, stderr=tty, timeout=ROOT_PROMPT_TIMEOUT, check=False,
-                )  # fmt: skip
+                    stdin=tty,
+                    stdout=tty,
+                    stderr=tty,
+                    timeout=ROOT_PROMPT_TIMEOUT,
+                    check=False,
+                )
         except subprocess.TimeoutExpired:
             pytest.fail(f"no sudo password within {ROOT_PROMPT_TIMEOUT}s; root-only test not run")
         finally:

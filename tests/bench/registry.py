@@ -62,9 +62,11 @@ def perf_tools(remmy: Path) -> tuple[Tool, ...]:
         Tool(
             name="xargs",
             argv=(
-                "/usr/bin/find {tree} -depth ! -type d -print0"
-                " | /usr/bin/xargs -0 -P{threads} -n256 /bin/rm -f"
-                " ; /usr/bin/find {tree} -depth -type d -delete",
+                (
+                    "/usr/bin/find {tree} -depth ! -type d -print0"
+                    " | /usr/bin/xargs -0 -P{threads} -n256 /bin/rm -f"
+                    " ; /usr/bin/find {tree} -depth -type d -delete"
+                ),
             ),
             shell=True,
             requires=("/usr/bin/find", "/usr/bin/xargs", "/bin/rm"),

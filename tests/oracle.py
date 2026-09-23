@@ -26,9 +26,7 @@ def _restore_modes(root: Path) -> None:
             os.chmod(d, 0o755, dir_fd=dirfd, follow_symlinks=False)
 
 
-def compare_with_rm(
-    remmy_bin: Path, root: Path, recipe: Recipe, args: list[str], threads: int = 4
-) -> None:
+def compare_with_rm(remmy_bin: Path, root: Path, recipe: Recipe, args: list[str], threads: int = 4) -> None:
     """Build ``recipe`` twice under ``root``, run each tool, compare outcomes.
 
     The surviving paths, their types and contents must match, and both tools
