@@ -4,16 +4,8 @@
 
 **`rm -rf`, 3× faster on macOS.**
 
-[![3× faster than rm](https://img.shields.io/badge/vs_%2Fbin%2Frm-3%C3%97_faster-brightgreen?style=flat-square)](#results)
-[![133k files/s](https://img.shields.io/badge/throughput-133k_files%2Fs-brightgreen?style=flat-square)](#results)
 [![Status: experimental](https://img.shields.io/badge/status-experimental-orange?style=flat-square)](#results)
-
 [![CI](https://img.shields.io/github/actions/workflow/status/markovejnovic/remmy/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/markovejnovic/remmy/actions/workflows/ci.yml)
-[![Sanitizers](https://img.shields.io/badge/sanitizers-ASan_%C2%B7_UBSan_%C2%B7_TSan-blueviolet?style=flat-square)](.github/workflows/ci.yml)
-[![Tested against /bin/rm](https://img.shields.io/badge/tested_against-%2Fbin%2Frm-blueviolet?style=flat-square)](tests/test_differential.py)
-[![Hypothesis](https://img.shields.io/badge/property_tests-Hypothesis-blueviolet?style=flat-square)](tests/test_properties.py)
-
-![macOS](https://img.shields.io/badge/macOS-APFS-black?style=flat-square&logo=apple&logoColor=white)
 ![C++26](https://img.shields.io/badge/C%2B%2B-26-00599C?style=flat-square&logo=cplusplus&logoColor=white)
 ![GCC 16](https://img.shields.io/badge/GCC-16-A42E2B?style=flat-square&logo=gnu&logoColor=white)
 [![License](https://img.shields.io/badge/license-source--available-lightgrey?style=flat-square)](LICENSE)
