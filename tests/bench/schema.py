@@ -15,7 +15,7 @@ import enum
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -83,26 +83,33 @@ class Tool:
     """A deletion program and exactly how it is invoked.
 
     ``argv`` uses ``{tree}`` (required) and optionally ``{threads}``; a tool
-    whose argv mentions ``{threads}`` is swept over the plan's thread counts.
-    ``shell`` tools are one pipeline string run through ``/bin/sh -c``.
+    whose argv or env mentions ``{threads}`` is swept over the plan's thread
+    counts. ``shell`` tools are one pipeline string run through ``/bin/sh -c``.
     """
 
     name: str
     argv: tuple[str, ...]
     shell: bool = False
+    env: Mapping[str, str] = field(default_factory=dict)
+    """Environment variables for the tool, set outside its timer (never via
+    ``/usr/bin/env``, whose extra exec would be timed); values may use ``{threads}``."""
     requires: tuple[str, ...] = ()
     """Executables that must exist for the tool to be benchmarked."""
 
     def __post_init__(self) -> None:
         joined = " ".join(self.argv)
         _require("{tree}" in joined, f"{self.name}: argv never mentions {{tree}}")
-        unknown = set(re.findall(r"\{[^}]*\}", joined)) - {"{tree}", "{threads}"}
+        placeholders = set(re.findall(r"\{[^}]*\}", " ".join((joined, *self.env.values()))))
+        unknown = placeholders - {"{tree}", "{threads}"}
         _require(not unknown, f"{self.name}: unknown placeholders {sorted(unknown)}")
         _require(not self.shell or len(self.argv) == 1, f"{self.name}: shell tools take one string")
 
     @property
     def sweeps_threads(self) -> bool:
-        return any("{threads}" in a for a in self.argv)
+        return any("{threads}" in a for a in (*self.argv, *self.env.values()))
+
+    def env_for(self, threads: int) -> dict[str, str]:
+        return {k: v.replace("{threads}", str(threads)) for k, v in self.env.items()}
 
     def argv_for(self, tree: Path, threads: int) -> list[str]:
         filled = [a.replace("{tree}", str(tree)).replace("{threads}", str(threads)) for a in self.argv]

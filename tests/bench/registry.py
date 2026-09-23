@@ -74,7 +74,8 @@ def perf_tools(remmy: Path) -> tuple[Tool, ...]:
         # The subject. Its default thread count is 4 (the sweep includes it).
         Tool(
             name="remmy",
-            argv=("/usr/bin/env", "REMMY_THREADS={threads}", str(remmy), "-r", "{tree}"),
+            argv=(str(remmy), "-r", "{tree}"),
+            env={"REMMY_THREADS": "{threads}"},
             requires=(str(remmy),),
         ),
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import shlex
 import subprocess
@@ -50,6 +51,9 @@ def _time_cell(plan: Plan, fixture: Fixture, cell: CellKey, env: Environment, *,
     work = env.scratch / f"{cell.fixture}-{cell.cache}-{cell.tool}-{cell.threads}"
     work.mkdir(parents=True, exist_ok=True)
     tree, state, export = work / "tree", work / "state.json", work / "hyperfine.json"
+    prepare_err = work / "prepare.err"
+    prepare_err.unlink(missing_ok=True)
+    tool = plan.tool(cell.tool)
 
     prepare = [env.python, str(HERE / "prepare.py"), str(env.mktree), str(tree), str(state)]
     if cell.cache is Cache.COLD:
@@ -69,13 +73,16 @@ def _time_cell(plan: Plan, fixture: Fixture, cell: CellKey, env: Environment, *,
         str(export),
         "--command-name",
         str(cell),
-        shlex.join(plan.tool(cell.tool).argv_for(tree, cell.threads)),
+        shlex.join(tool.argv_for(tree, cell.threads)),
     ]
-    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    # hyperfine passes its environment on to the tool; setting it here keeps it out of the timer.
+    tool_env = {**os.environ, **tool.env_for(cell.threads)}
+    done = subprocess.run(command, capture_output=True, text=True, check=False, env=tool_env)
     if done.returncode != 0:
-        raise BenchmarkFailed(
-            f"{cell}: hyperfine exited {done.returncode}\n{done.stderr.strip() or done.stdout.strip()}"
-        )
+        why = done.stderr.strip() or done.stdout.strip()
+        if prepare_err.exists():
+            why += f"\nprepare: {prepare_err.read_text().strip()}"
+        raise BenchmarkFailed(f"{cell}: hyperfine exited {done.returncode}\n{why}")
 
     (result,) = json.loads(export.read_text())["results"]
     built = TreeCounts(**json.loads(state.read_text()))

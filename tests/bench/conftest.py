@@ -99,11 +99,14 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         return
     import charts
 
-    charts.render(bench.run(), bench.summary(), bench.out)
+    summary = bench.summary()
+    # Before the charts, so the data survives a charting failure.
+    bench.write_json(summary)
+    charts.render(bench.run(), summary, bench.out)
     shutil.rmtree(bench.env.scratch, ignore_errors=True)
     terminal = session.config.pluginmanager.getplugin("terminalreporter")
     if terminal is not None:
         terminal.write_sep("=", "benchmark")
-        for line in stats.headline(bench.summary()):
+        for line in stats.headline(summary):
             terminal.write_line(line)
         terminal.write_line(f"results: {bench.out}")
