@@ -1,0 +1,19 @@
+---
+# Strict, Google-style static analysis. Google checks are the core; the
+# analyzer/bugprone/performance families raise the strictness bar.
+Checks: >
+  -*,
+  google-*,
+  -google-readability-namespace-comments,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  misc-*,
+  -misc-no-recursion,
+  -misc-include-cleaner
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*'
+FormatStyle: file
+CheckOptions:
+  misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true

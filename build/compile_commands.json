@@ -1,0 +1,20 @@
+[
+{
+  "directory": "/Users/marko/Desktop/remmy/build",
+  "command": "/usr/bin/clang++ -D_GLIBCXX_ASSERTIONS=1 -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST -I/Users/marko/Desktop/remmy -O3 -DNDEBUG -std=c++26 -flto=thin -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -fno-exceptions -fstack-protector-strong -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wundef -Wdouble-promotion -Wimplicit-fallthrough -Wcast-align -Wnon-virtual-dtor -Woverloaded-virtual -Wold-style-cast -O3 -funroll-loops -march=native -fno-unwind-tables -fno-asynchronous-unwind-tables -o CMakeFiles/remmy.dir/src/main.cpp.o -c /Users/marko/Desktop/remmy/src/main.cpp",
+  "file": "/Users/marko/Desktop/remmy/src/main.cpp",
+  "output": "/Users/marko/Desktop/remmy/build/CMakeFiles/remmy.dir/src/main.cpp.o"
+},
+{
+  "directory": "/Users/marko/Desktop/remmy/build",
+  "command": "/usr/bin/clang++ -D_GLIBCXX_ASSERTIONS=1 -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST -I/Users/marko/Desktop/remmy -O3 -DNDEBUG -std=c++26 -flto=thin -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -UNDEBUG -fno-exceptions -fstack-protector-strong -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wundef -Wdouble-promotion -Wimplicit-fallthrough -Wcast-align -Wnon-virtual-dtor -Woverloaded-virtual -Wold-style-cast -O3 -funroll-loops -march=native -fno-unwind-tables -fno-asynchronous-unwind-tables -o CMakeFiles/work_stealing_queue_test.dir/tests/work_stealing_queue_test.cpp.o -c /Users/marko/Desktop/remmy/tests/work_stealing_queue_test.cpp",
+  "file": "/Users/marko/Desktop/remmy/tests/work_stealing_queue_test.cpp",
+  "output": "/Users/marko/Desktop/remmy/build/CMakeFiles/work_stealing_queue_test.dir/tests/work_stealing_queue_test.cpp.o"
+},
+{
+  "directory": "/Users/marko/Desktop/remmy/build",
+  "command": "/usr/bin/clang++ -D_GLIBCXX_ASSERTIONS=1 -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST -I/Users/marko/Desktop/remmy -O3 -DNDEBUG -std=c++26 -flto=thin -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -UNDEBUG -fno-exceptions -fstack-protector-strong -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wundef -Wdouble-promotion -Wimplicit-fallthrough -Wcast-align -Wnon-virtual-dtor -Woverloaded-virtual -Wold-style-cast -O3 -funroll-loops -march=native -fno-unwind-tables -fno-asynchronous-unwind-tables -o CMakeFiles/queue_publication_test.dir/tests/queue_publication_test.cpp.o -c /Users/marko/Desktop/remmy/tests/queue_publication_test.cpp",
+  "file": "/Users/marko/Desktop/remmy/tests/queue_publication_test.cpp",
+  "output": "/Users/marko/Desktop/remmy/build/CMakeFiles/queue_publication_test.dir/tests/queue_publication_test.cpp.o"
+}
+]

@@ -1,0 +1,48 @@
+[project]
+name = "remmy-e2e"
+version = "0"
+description = "End-to-end tests for the remmy executable"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest-repeat>=0.9",
+  "hypothesis>=6.100",
+  "jaraco.path>=3.7",
+  "pytest>=9.0",
+  "pytest-timeout>=2.3",
+  "pytest-xdist>=3.6",
+  "pytest-icdiff>=0.9",
+  "pytest-instafail>=0.5.0",
+  "pytest-env>=1.7.1",
+  "pytest-rich>=0.2.0",
+  "pytest-check>=2.9.1",
+  "numpy>=2.5.3",
+  "scipy>=1.18.1",
+  "matplotlib>=3.11.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--instafail"]
+timeout = 300
+markers = [
+  "slow: large trees or long-running stress; deselect with -m 'not slow'",
+  "differential: compares remmy's end state against /bin/rm on an identical tree",
+  "benchmark: opt-in comparison benchmark (pass --bench=demo|full|durability)",
+  "stress: race-prone; hammer with `-m stress --count N`",
+  "filesystems: runs on scratch disk images of other filesystem types (macOS, hdiutil)",
+]
+
+# Variables that change remmy's behaviour must come from the tests, never from
+# the invoking shell.
+[tool.pytest_env]
+REMMY_THREADS = { unset = true }
+REMMY_FAULTS = { unset = true }
+REMMY_FAULT_LOG = { unset = true }
+REMMY_FAULT_DT_UNKNOWN = { unset = true }
+DYLD_INSERT_LIBRARIES = { unset = true }

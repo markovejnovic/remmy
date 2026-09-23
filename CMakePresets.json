@@ -1,0 +1,60 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++-16",
+        "BUILD_TESTING": "ON",
+        "REMMY_ENABLE_CLANG_TIDY": "OFF"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "GCC release",
+      "binaryDir": "${sourceDir}/build/gcc-release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "displayName": "GCC debug",
+      "binaryDir": "${sourceDir}/build/gcc-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "lint",
+      "inherits": "debug",
+      "displayName": "Clang + clang-tidy over cutils (remmy needs GCC reflection)",
+      "binaryDir": "${sourceDir}/build/clang-lint",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
+        "BUILD_TESTING": "OFF",
+        "REMMY_ENABLE_CLANG_TIDY": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "release" },
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "lint", "configurePreset": "lint" }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    }
+  ]
+}

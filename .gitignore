@@ -1,0 +1,7 @@
+build/
+__pycache__/
+.venv/
+.pytest_cache/
+.hypothesis/
+tests/bench/out/
+docs/superpowers/
