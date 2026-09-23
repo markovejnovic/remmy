@@ -12,11 +12,13 @@ endif()
 set(cutils_sanitizer_flags "-fsanitize=${cutils_sanitizer},undefined,float-divide-by-zero,vptr")
 if(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|AppleClang)$")
   string(APPEND cutils_sanitizer_flags ",integer,local-bounds,nullability")
+  list(APPEND cutils_sanitizer_ignorelist
+    "-fsanitize-ignorelist=${CMAKE_CURRENT_LIST_DIR}/sanitizer-ignorelist.txt")
 endif()
 
 add_library(cutils_test_options INTERFACE)
 target_compile_options(cutils_test_options INTERFACE ${cutils_sanitizer_flags}
-  -O1 -g -UNDEBUG -fno-omit-frame-pointer -fno-optimize-sibling-calls
+  ${cutils_sanitizer_ignorelist} -O1 -g -UNDEBUG -fno-omit-frame-pointer -fno-optimize-sibling-calls
   -fno-sanitize-recover=all)
 target_link_options(cutils_test_options INTERFACE
   ${cutils_sanitizer_flags} -fno-sanitize-recover=all)

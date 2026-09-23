@@ -144,6 +144,9 @@ SCENARIO("The pool learns the descriptor ceiling from actual exhaustion",
       THEN("it is ignored") { REQUIRE_FALSE(Pool::Exhausted()); }
     }
     WHEN("descriptors are opened until the kernel refuses") {
+      // Observe everything before asserting: while no descriptor is free,
+      // sanitizer runtimes (which probe memory through a pipe) and Catch's
+      // reporting cannot run, so the descriptors are released first.
       std::vector<Fd> held;
       int failure = 0;
       for (;;) {
@@ -154,26 +157,30 @@ SCENARIO("The pool learns the descriptor ceiling from actual exhaustion",
         }
         held.emplace_back(raw);
       }
-      THEN("the refusal is EMFILE and every descriptor is counted") {
-        REQUIRE(failure == EMFILE);
-        REQUIRE_FALSE(held.empty());
-        REQUIRE(Pool::Live() == held.size());
+      const std::size_t opened = held.size();
+      const auto live_when_full = Pool::Live();
+      Pool::NoteExhaustion();
+      const bool exhausted_when_full = Pool::Exhausted();
+      if (!held.empty()) {
+        held.pop_back();
       }
+      const bool exhausted_after_one = Pool::Exhausted();
+      held.clear();
+      const auto live_after_all = Pool::Live();
 
-      AND_WHEN("the exhaustion is noted") {
-        Pool::NoteExhaustion();
-        THEN("the pool reports exhaustion") { REQUIRE(Pool::Exhausted()); }
-
-        AND_WHEN("one descriptor is released") {
-          held.pop_back();
-          THEN("the pool is no longer exhausted") {
-            REQUIRE_FALSE(Pool::Exhausted());
-          }
-        }
-        AND_WHEN("every descriptor is released") {
-          held.clear();
-          THEN("the live count returns to zero") { REQUIRE(Pool::Live() == 0); }
-        }
+      THEN("the refusal is EMFILE and every descriptor was counted") {
+        REQUIRE(failure == EMFILE);
+        REQUIRE(opened > 0);
+        REQUIRE(live_when_full == opened);
+      }
+      THEN("noting the exhaustion marks the pool exhausted") {
+        REQUIRE(exhausted_when_full);
+      }
+      THEN("releasing one descriptor ends the exhaustion") {
+        REQUIRE_FALSE(exhausted_after_one);
+      }
+      THEN("releasing every descriptor returns the live count to zero") {
+        REQUIRE(live_after_all == 0);
       }
     }
   }
