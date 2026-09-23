@@ -8,6 +8,9 @@ from pathlib import Path
 
 SPOTLIGHT_CPU_PCT = 10.0
 BACKUP_CPU_PCT = 10.0
+XPROTECT_CPU_PCT = 10.0
+"""XProtect scans processes that delete many files, which inflates tools that
+spawn many deleting processes (xargs) far more than single-process ones."""
 
 
 def _out(*argv: str) -> str:
@@ -28,7 +31,7 @@ def unfit(scratch: Path) -> str | None:
         return f"CPU is thermally limited to {limit.group(1)}%"
     if "com.apple" in _out("/usr/bin/tmutil", "listlocalsnapshots", str(scratch)):
         return "local Time Machine snapshots exist on the scratch volume"
-    spotlight = backup = 0.0
+    spotlight = backup = xprotect = 0.0
     for line in _out("/bin/ps", "-A", "-o", "%cpu=,comm=").splitlines():
         cpu, _, command = line.strip().partition(" ")
         name = Path(command.strip()).name
@@ -36,8 +39,12 @@ def unfit(scratch: Path) -> str | None:
             spotlight += float(cpu)
         elif name == "backupd":
             backup += float(cpu)
+        elif name.startswith("XProtect") or name == "xprotectd":
+            xprotect += float(cpu)
     if spotlight > SPOTLIGHT_CPU_PCT:
         return f"Spotlight is busy ({spotlight:.0f}% CPU)"
     if backup > BACKUP_CPU_PCT:
         return f"Time Machine is busy ({backup:.0f}% CPU)"
+    if xprotect > XPROTECT_CPU_PCT:
+        return f"XProtect is busy ({xprotect:.0f}% CPU)"
     return None
