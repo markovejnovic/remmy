@@ -1,5 +1,6 @@
 # libc++ converts between signed and unsigned types on purpose (LLVM 23's
 # std::from_chars, for one). Clang's implicit-conversion checks are for cutils'
 # own code, not the standard library's.
-[implicit-integer-sign-change|implicit-signed-integer-truncation|implicit-unsigned-integer-truncation]
+# Section names are globs: alternatives take {a,b}, not a|b.
+[{implicit-integer-sign-change,implicit-signed-integer-truncation,implicit-unsigned-integer-truncation}]
 src:*/c++/v1/*
