@@ -1,1 +1,0 @@
--- See LICENSE in the repository root.
