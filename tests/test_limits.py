@@ -8,7 +8,6 @@ from pathlib import Path
 import fstree
 import pytest
 from harness import Runner
-from known_bugs import PATH_MAX_EXCEEDED
 from pytest_check import check
 
 # macOS PATH_MAX; Linux is 4096. Chains below exceed both.
@@ -62,7 +61,6 @@ def test_starved_fd_limit_fails_cleanly(run: Runner, workdir: Path) -> None:
             assert res.errors, res
 
 
-@PATH_MAX_EXCEEDED
 @pytest.mark.slow
 @pytest.mark.parametrize("multiple", [2, 5])
 def test_tree_deeper_than_path_max(run: Runner, workdir: Path, threads: int, multiple: int) -> None:
@@ -79,7 +77,6 @@ def test_tree_deeper_than_path_max(run: Runner, workdir: Path, threads: int, mul
         assert fstree.listing(workdir) == set()
 
 
-@PATH_MAX_EXCEEDED
 @pytest.mark.slow
 def test_tree_deeper_than_path_max_under_fd_limit(run: Runner, workdir: Path) -> None:
     name = "m" * 100

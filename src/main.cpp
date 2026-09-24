@@ -236,10 +236,9 @@ class FileUnlinkWorker {
       }
       std::atomic_thread_fence(std::memory_order_acquire);
 
-      const char* path = current->PathInto(path_buffer_);
-      if (cutils::os::rmdir(path) != 0 && errno != ENOENT) {
+      if (current->Remove(path_buffer_) != 0 && errno != ENOENT) {
         failures_++;
-        std::println(stderr, "cannot remove '{}': {}", path,
+        std::println(stderr, "cannot remove '{}': {}", path_buffer_,
                      std::strerror(errno));
       }
 

@@ -110,6 +110,14 @@ struct DirNode {
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
   auto Open(std::string& scratch) noexcept
       -> std::expected<void, cutils::os::OpenError>;
+
+  /// @brief Remove this (by now empty) directory.
+  ///
+  /// @param scratch A scratch buffer; it holds this node's path afterwards.
+  ///
+  /// Works on paths of any length, including those longer than PATH_MAX.
+  /// Returns 0 on success, or -1 with errno set, like rmdir.
+  auto Remove(std::string& scratch) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the
