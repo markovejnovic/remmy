@@ -177,7 +177,6 @@ class FileUnlinkWorker {
       }
 
       if (!is_dir) {
-        // ENOENT means it is already gone, which is all rm -f asks for.
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
             errno != ENOENT) {
           failures_++;

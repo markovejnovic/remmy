@@ -218,8 +218,8 @@ static int Decide(enum Fn fn, int dirfd, const char* name) {
       char path[PATH_MAX];
       Resolve(dirfd, name, path);
       char line[PATH_MAX + 64];
-      int len = snprintf(line, sizeof line, "%s\t%d\t%s", kFnNames[fn],
-                         r->err, path);
+      int len =
+          snprintf(line, sizeof line, "%s\t%d\t%s", kFnNames[fn], r->err, path);
       // Write through the terminating NUL, which ends the record.
       if (len > 0)
         (void)write(log_fd, line,
