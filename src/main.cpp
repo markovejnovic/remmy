@@ -169,11 +169,9 @@ class FileUnlinkWorker {
       bool is_dir = entry.is_directory();
       if (entry.is_type_unknown()) {
         // Some filesystems don't populate d_type; fall back to fstatat.
-        // An entry that cannot be classified is skipped, not guessed at.
         struct stat st;
         if (cutils::os::fstatat(task->fd_, entry.c_str(), &st,
                                 AT_SYMLINK_NOFOLLOW) != 0) {
-          // ENOENT means it is already gone, which is all rm -f asks for.
           if (errno != ENOENT) {
             failures_++;
             std::println(stderr, "cannot stat '{}/{}': {}",
