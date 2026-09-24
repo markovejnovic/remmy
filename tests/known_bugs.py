@@ -8,12 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-UNCLASSIFIED_ENTRY_TREATED_AS_FILE = pytest.mark.xfail(
-    strict=True,
-    reason="when d_type is unknown and fstatat fails, the entry is treated as a file; "
-    "its unlink fails silently and the stat error is never reported",
-)
-
 PATH_MAX_EXCEEDED = pytest.mark.xfail(
     strict=True,
     reason="directories are removed by full path (rmdir), which fails with "

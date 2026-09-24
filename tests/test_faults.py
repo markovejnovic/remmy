@@ -18,7 +18,6 @@ from faults import Fault, Injection, run_with_faults
 from fstree import Special, Symlink
 from hypothesis import assume, event, given, target
 from hypothesis import strategies as st
-from known_bugs import UNCLASSIFIED_ENTRY_TREATED_AS_FILE
 from pytest_check import check
 
 
@@ -294,7 +293,6 @@ def test_unknown_entry_types_fall_back_to_stat(remmy_bin: Path, faultlib: Path, 
         assert fstree.listing(workdir) == set()
 
 
-@UNCLASSIFIED_ENTRY_TREATED_AS_FILE
 def test_failed_fallback_stat_is_reported(remmy_bin: Path, faultlib: Path, workdir: Path) -> None:
     _tree(workdir)
 

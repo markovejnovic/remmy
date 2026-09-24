@@ -171,9 +171,16 @@ class FileUnlinkWorker {
         // Some filesystems don't populate d_type; fall back to fstatat.
         struct stat st;
         if (cutils::os::fstatat(task->fd_, entry.c_str(), &st,
-                                AT_SYMLINK_NOFOLLOW) == 0) {
-          is_dir = S_ISDIR(st.st_mode);
+                                AT_SYMLINK_NOFOLLOW) != 0) {
+          if (errno != ENOENT) {
+            failures_++;
+            std::println(stderr, "cannot stat '{}/{}': {}",
+                         task->PathInto(path_buffer_), entry.name(),
+                         std::strerror(errno));
+          }
+          continue;
         }
+        is_dir = S_ISDIR(st.st_mode);
       }
 
       if (!is_dir) {
