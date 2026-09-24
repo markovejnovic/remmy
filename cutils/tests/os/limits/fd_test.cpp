@@ -185,4 +185,50 @@ SCENARIO("The pool learns the descriptor ceiling from actual exhaustion",
     }
   }
 }
+
+SCENARIO("The epoch tells a refused open whether one of ours may free a slot",
+         "[limits]") {
+  GIVEN("an epoch taken with no descriptor of ours held") {
+    const auto live = Pool::Live();
+    const auto epoch = Pool::Epoch();
+    if (live == 0) {
+      REQUIRE_FALSE(Pool::MayHaveFreed(epoch));
+    }
+
+    WHEN("an open fails") {
+      errno = 0;
+      const Fd missing =
+          Fd::Open([] { return ::open("/nonexistent/cutils", O_RDONLY); });
+      const int failure = errno;
+      THEN("nothing is counted, errno survives, and the epoch stays put") {
+        REQUIRE_FALSE(missing.IsOpen());
+        REQUIRE(failure == ENOENT);
+        REQUIRE(Pool::Live() == live);
+        REQUIRE(Pool::Epoch() == epoch);
+      }
+    }
+    WHEN("a descriptor is opened") {
+      Fd held = Fd::Open([] { return ::open("/dev/null", O_RDONLY); });
+      REQUIRE(held.IsOpen());
+      THEN("it is live and counts as one that may free a slot") {
+        REQUIRE(Pool::Live() == live + 1);
+        REQUIRE(Pool::Epoch() == epoch);
+        REQUIRE(Pool::MayHaveFreed(epoch));
+      }
+      AND_WHEN("it is closed") {
+        held.Close();
+        THEN("the epoch advances, so an open attempted before still may") {
+          REQUIRE(Pool::Live() == live);
+          REQUIRE(Pool::Epoch() == epoch + 1);
+          REQUIRE(Pool::MayHaveFreed(epoch));
+        }
+        THEN("an open attempted after cannot, once nothing is live") {
+          if (live == 0) {
+            REQUIRE_FALSE(Pool::MayHaveFreed(Pool::Epoch()));
+          }
+        }
+      }
+    }
+  }
 }
+}  // namespace

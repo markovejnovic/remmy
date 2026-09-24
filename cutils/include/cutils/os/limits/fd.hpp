@@ -42,6 +42,27 @@ class Pool {
   /// @brief Record that a leased file descriptor was released.
   static void NoteReleased() noexcept;
 
+  /// @brief Record that an open counted by NoteAcquired beforehand failed.
+  ///
+  /// Unlike NoteReleased, this does not advance the Epoch: the kernel never
+  /// handed out a descriptor, so none was freed.
+  static void NoteAbandoned() noexcept;
+
+  /// @brief How many leased descriptors have been released so far.
+  ///
+  /// Snapshot it before an open, for MayHaveFreed.
+  [[nodiscard]] static auto Epoch() noexcept -> std::uint64_t;
+
+  /// @brief Whether an open refused for lack of descriptors, attempted after
+  ///        `epoch` was taken, could succeed if retried.
+  ///
+  /// True when one of our descriptors is leased or being opened now, or one
+  /// was released since `epoch`: any of them may have held the slot the kernel
+  /// refused, and it is or will be freed. False means none of ours held a slot
+  /// through the attempt, so the pressure is not ours and waiting cannot help.
+  /// Exact only for descriptors counted before their open (see Fd::Open).
+  [[nodiscard]] static auto MayHaveFreed(std::uint64_t epoch) noexcept -> bool;
+
   /// @brief Record that opening a file descriptor was refused, teaching the
   ///        pool where the practical ceiling is.
   static void NoteExhaustion() noexcept;

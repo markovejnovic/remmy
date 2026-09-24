@@ -8,6 +8,7 @@
 
 #include <unistd.h>
 
+#include <concepts>
 #include <cutils/exceptions/exceptions.hpp>
 #include <cutils/os/limits/fd.hpp>
 #include <functional>
@@ -31,10 +32,30 @@ class Fd {
 
   Fd() noexcept = default;
 
+  /// @brief Adopt an already open descriptor, counting it from now on.
+  ///
+  /// Prefer Open: until this runs, the pool cannot see the descriptor.
   explicit Fd(int descriptor) noexcept : fd_(descriptor) {
     if (fd_ >= 0) {
       limits::fd::Pool::NoteAcquired();
     }
+  }
+
+  /// @brief Open a descriptor with `open_fn` (returning one, or -1 with errno
+  ///        set), counted against the pool from before the syscall.
+  ///
+  /// So the pool never misses a slot the kernel has handed out, which
+  /// Pool::MayHaveFreed relies on. An empty Fd means failure, errno intact.
+  template <std::invocable OpenFn>
+  [[nodiscard]] static auto Open(OpenFn&& open_fn) noexcept -> Fd {
+    limits::fd::Pool::NoteAcquired();
+    Fd out;
+    out.fd_ = std::forward<OpenFn>(open_fn)();
+    if (out.fd_ < 0) {
+      out.fd_ = kInvalid;
+      limits::fd::Pool::NoteAbandoned();
+    }
+    return out;
   }
 
   Fd(const Fd&) = delete;
