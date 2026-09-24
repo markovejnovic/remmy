@@ -80,6 +80,21 @@ def test_wide_directory(run: Runner, workdir: Path, threads: int) -> None:
         assert fstree.listing(workdir) == set()
 
 
+def test_wide_directory_with_subdirectories(run: Runner, workdir: Path, threads: int) -> None:
+    # Past 1024 files a scan hands its files out in batches; the directory must
+    # outlive both its batches and its subdirectories.
+    files = {f"f{i}": "" for i in range(5_000)}
+    subdirs = {f"s{i}": {f"g{j}": "" for j in range(50)} for i in range(20)}
+    fstree.build(workdir, {"w": files | subdirs, "keep": "k"})
+
+    res = run("-r", "w", threads=threads)
+
+    with check:
+        assert (res.returncode, res.stderr) == (0, ""), res
+    with check:
+        assert fstree.listing(workdir) == {"keep"}
+
+
 def test_many_sibling_directories(run: Runner, workdir: Path, threads: int) -> None:
     fstree.build(workdir, {"w": {f"d{i}": {"f": "", "g": {"h": ""}} for i in range(3_000)}})
 

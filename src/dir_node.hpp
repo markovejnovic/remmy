@@ -12,6 +12,8 @@
 #include <string>
 #include <system_error>
 
+#include "task.hpp"
+
 namespace remmy {
 
 struct DirNode;
@@ -28,7 +30,7 @@ using MutableParentChain = BasicParentChain<DirNode>;
 /// @brief Represents a single directory discovered by the recursive walk.
 ///
 /// This directory node represents a node in the directory
-struct DirNode {
+struct DirNode : Task {
   /// @brief Stores the file descriptor of the directory node.
   ///
   /// This can be in two states -- it will return [`IsOpen`] when the file
@@ -83,11 +85,21 @@ struct DirNode {
   /// This also acts as the refcount which keeps the DirNode alive in memory.
   std::atomic<std::uint32_t> remaining_children_dirs_;
 
+  /// @brief How many tasks still unlink through [`fd_`].
+  ///
+  /// The scan holds one, and each [`UnlinkBatch`] it hands out holds one. The
+  /// last to finish closes [`fd_`] and only then drops the scan's reference
+  /// in [`remaining_children_dirs_`], so the directory cannot be removed while
+  /// a batch is still emptying it.
+  std::atomic<std::uint32_t> fd_users_;
+
   explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name)
-      : fd_(std::move(fd)),
+      : Task{TaskKind::kScanDir},
+        fd_(std::move(fd)),
         parent_(parent),
         name_(std::move(name)),
-        remaining_children_dirs_(1) {}
+        remaining_children_dirs_(1),
+        fd_users_(1) {}
 
   /// @brief Walk the parent chain to build the full absolute path into the
   ///        given output buffer.

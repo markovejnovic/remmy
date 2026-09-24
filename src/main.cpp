@@ -26,6 +26,10 @@
 ///   - For each directory, it opens the directory and pushes it back into the
 ///     scheduler for another worker to pick up on it.
 ///
+/// A large directory would otherwise be emptied by one worker alone, so once a
+/// scan has unlinked `UnlinkBatch::kInlineFiles` files itself, it packs the
+/// rest of the file names into batches that other workers steal and unlink.
+///
 /// There are more caveats here that I'll briefly bore you with:
 ///
 ///   - Most POSIX systems have a limit on the total number of open directories,
@@ -70,10 +74,14 @@
 
 #include "cli.hpp"
 #include "dir_node.hpp"
+#include "task.hpp"
 
 namespace {
 
 using remmy::DirNode;
+using remmy::Task;
+using remmy::TaskKind;
+using remmy::UnlinkBatch;
 
 static auto ThreadCount() -> std::uint16_t {
   static constexpr const char* kEnvThreadsName = "REMMY_THREADS";
@@ -94,7 +102,7 @@ static auto ThreadCount() -> std::uint16_t {
 /// I've written will inject new tasks via [`Process`].
 class FileUnlinkWorker {
  public:
-  using task_type = DirNode*;
+  using task_type = Task*;
 
   static constexpr std::size_t kRunnable = 0;
   static constexpr std::size_t kAwaitingDescriptor = 1;
@@ -110,11 +118,26 @@ class FileUnlinkWorker {
   /// @brief The total number of failures that this worker encountered.
   std::size_t failures_ = 0;
 
+  /// @brief The batch the current scan is filling, if it has started batching.
+  UnlinkBatch* batch_ = nullptr;
+
   /// @brief The main entry-point the scheduler invokes for this task.
   ///
   /// This function is called by the scheduler periodically as new tasks are
   /// admitted into the scheduler.
-  void Process(DirNode* task, auto& ctx) noexcept {
+  void Process(Task* task, auto& ctx) noexcept {
+    switch (task->kind) {
+      case TaskKind::kScanDir:
+        ProcessDir(static_cast<DirNode*>(task), ctx);
+        return;
+      case TaskKind::kUnlinkBatch:
+        ProcessBatch(static_cast<UnlinkBatch*>(task));
+        return;
+    }
+  }
+
+ private:
+  void ProcessDir(DirNode* task, auto& ctx) noexcept {
     auto open_result = task->Open(path_buffer_);
     if (!open_result) {
       const std::errc err = open_result.error();
@@ -143,14 +166,63 @@ class FileUnlinkWorker {
     }
 
     Scan(task, ctx);
-    task->fd_.Close();
-
-    MaybeCleanupDirNode(task);
+    SubmitBatch(ctx);
+    ReleaseFd(task);
   }
 
- private:
+  /// @brief Unlink every name in a batch, then free it.
+  void ProcessBatch(UnlinkBatch* batch) noexcept {
+    DirNode* dir = batch->dir;
+    batch->ForEach([&](const char* name) { Unlink(dir, name); });
+    delete batch;
+    ReleaseFd(dir);
+  }
+
+  /// @brief Unlink one non-directory entry of `dir`, reporting failures.
+  void Unlink(DirNode* dir, const char* name) noexcept {
+    if (cutils::os::unlinkat(dir->fd_, name, 0) != 0 && errno != ENOENT) {
+      failures_++;
+      std::println(stderr, "cannot remove '{}/{}': {}",
+                   dir->PathInto(path_buffer_), name, std::strerror(errno));
+    }
+  }
+
+  /// @brief Hand the batch being filled, if any, to the scheduler.
+  void SubmitBatch(auto& ctx) noexcept {
+    if (batch_ == nullptr) {
+      return;
+    }
+    // Count the batch on the directory before publishing it: a worker could
+    // steal and finish it the instant Submit returns.
+    batch_->dir->fd_users_.fetch_add(1, std::memory_order_relaxed);
+    ctx.Submit(std::exchange(batch_, nullptr), kRunnable);
+  }
+
+  /// @brief Queue a file for another worker to unlink, starting a new batch
+  ///        when the current one is full.
+  void Defer(DirNode* dir, std::string_view name, auto& ctx) noexcept {
+    if (batch_ != nullptr && batch_->TryAppend(name)) {
+      return;
+    }
+    SubmitBatch(ctx);
+    batch_ = new UnlinkBatch(dir);
+    // A name is at most NAME_MAX bytes, far below a batch's capacity.
+    (void)batch_->TryAppend(name);
+  }
+
+  /// @brief Drop one user of the directory's descriptor. The last user closes
+  ///        it and releases the scan's reference on the directory.
+  void ReleaseFd(DirNode* dir) noexcept {
+    if (dir->fd_users_.fetch_sub(1, std::memory_order_acq_rel) != 1) {
+      return;
+    }
+    dir->fd_.Close();
+    MaybeCleanupDirNode(dir);
+  }
+
   /// @brief Scan through the given directory.
   void Scan(DirNode* task, auto& ctx) noexcept {
+    std::size_t inline_files = 0;
     for (const auto& read : dirs_.Read(task->fd_)) {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
@@ -184,12 +256,13 @@ class FileUnlinkWorker {
       }
 
       if (!is_dir) {
-        if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
-            errno != ENOENT) {
-          failures_++;
-          std::println(stderr, "cannot remove '{}/{}': {}",
-                       task->PathInto(path_buffer_), entry.name(),
-                       std::strerror(errno));
+        // Small directories are emptied here. Past kInlineFiles the rest is
+        // batched out so other workers can share a large directory.
+        if (inline_files < UnlinkBatch::kInlineFiles) {
+          ++inline_files;
+          Unlink(task, entry.c_str());
+        } else {
+          Defer(task, entry.name(), ctx);
         }
         continue;
       }
@@ -276,7 +349,7 @@ constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
-  if (!scheduler.Submit(task)) {
+  if (!scheduler.Submit(static_cast<Task*>(task))) {
     delete task;
   }
 }
