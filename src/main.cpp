@@ -115,23 +115,21 @@ class FileUnlinkWorker {
   /// This function is called by the scheduler periodically as new tasks are
   /// admitted into the scheduler.
   void Process(DirNode* task, auto& ctx) noexcept {
+    const std::uint64_t epoch = cutils::os::limits::fd::Pool::Epoch();
     auto open_result = task->Open(path_buffer_);
     if (!open_result) {
       const std::errc err = open_result.error();
-      // We've failed to open the path_buffer_. If it's due to exhausted FDs,
-      // and we have FDs we can open, let's reschedule it and hope that later
-      // we'll have some free FDs to use.
+      // Out of descriptors: if one of ours may have held the refused slot, it
+      // is or will be freed, so park the directory and retry it later. Asking
+      // Live() alone would race: another worker can hold the last descriptor
+      // when the open fails and close it before we look.
       if ((err == std::errc::too_many_files_open_in_system ||
            err == std::errc::too_many_files_open) &&
-          cutils::os::limits::fd::Pool::Live() > 0) {
+          cutils::os::limits::fd::Pool::MayHaveFreed(epoch)) {
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
-        // We're not using any FDs, so chances are we won't be able to get
-        // anywhere.
-        //
-        // Note there's a small TOCTOU race here -- when we "note exhaustion"
-        // inside of DirNode::Open, we _could_ have it return the exhaust FD
-        // count we're using to avoid the TOCTOU race, but it's probably fine.
+        // None of ours held a descriptor through the attempt, so waiting for
+        // our own to be freed cannot help.
         failures_++;
         std::println(stderr, "cannot open '{}': {}",
                      task->PathInto(path_buffer_),
