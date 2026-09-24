@@ -20,6 +20,17 @@ NAME_MAX = 255
 # FAT and exFAT reject these in names, on top of control characters.
 _DOS_FORBIDDEN = '"*:<>?\\|'
 
+# What macOS's exFAT and FAT drivers mangle even in NFD names, found by creating
+# and unlinking every BMP character on both:
+# - the Services for Macintosh range, where the drivers store DOS-forbidden
+#   characters, lists back as those characters (U+F000 as an empty name);
+# - U+0338, the combining long solidus overlay, lists back precomposed
+#   (U+2208 U+0338 as U+2209);
+# - final sigma is case-folded away, the byte order mark is dropped, and
+#   SYMBOL FOR NULL does not survive FAT32.
+_SFM_RANGE = range(0xF000, 0xF100)
+_LOSSY_SINGLES = frozenset("\u0338\u03c2\ufeff\u2400")
+
 
 @dataclass(frozen=True)
 class FsCaps:
@@ -31,6 +42,9 @@ class FsCaps:
     # Only names already in NFD. macOS's exFAT driver lists NFC names as NFD and
     # then cannot unlink the listed name (ENOENT), which breaks every tree walker.
     nfd_names: bool = False
+    # Avoid characters that macOS's exFAT and FAT drivers list back in a form
+    # they cannot unlink, even in NFD (see _LOSSY_SINGLES).
+    lossy_names: bool = False
 
 
 APFS = FsCaps()
@@ -47,6 +61,8 @@ def fs_key(name: str) -> str:
 
 def _valid_name(caps: FsCaps, name: str) -> bool:
     if name in (".", "..") or len(name.encode()) > NAME_MAX:
+        return False
+    if caps.lossy_names and any(c in _LOSSY_SINGLES or ord(c) in _SFM_RANGE for c in name):
         return False
     if caps.dos_names:
         # Trailing dots and spaces are stripped, so the name would change.
