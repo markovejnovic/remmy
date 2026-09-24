@@ -177,8 +177,14 @@ class FileUnlinkWorker {
       }
 
       if (!is_dir) {
-        cutils::os::unlinkat(task->fd_, entry.c_str(),
-                             0);  // TODO(markovejnovic): error handling.
+        // ENOENT means it is already gone, which is all rm -f asks for.
+        if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
+            errno != ENOENT) {
+          failures_++;
+          std::println(stderr, "cannot remove '{}/{}': {}",
+                       task->PathInto(path_buffer_), entry.name(),
+                       std::strerror(errno));
+        }
         continue;
       }
 

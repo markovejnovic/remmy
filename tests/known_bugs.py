@@ -8,12 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-SWALLOWED_UNLINK_ERROR = pytest.mark.xfail(
-    strict=True,
-    reason="unlinkat failures inside a tree are ignored (TODO in FileUnlinkWorker::Scan); "
-    "only the parents' ENOTEMPTY is reported",
-)
-
 UNCLASSIFIED_ENTRY_TREATED_AS_FILE = pytest.mark.xfail(
     strict=True,
     reason="when d_type is unknown and fstatat fails, the entry is treated as a file; "
