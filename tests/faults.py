@@ -81,9 +81,9 @@ def run_with_faults(
         res = run_remmy(remmy_bin, args, cwd=cwd, threads=threads, env=env)
         assert res.returncode != 125, f"fault library rejected its configuration\n{res}"
         injected = []
-        for line in log.read_text(errors="surrogateescape").splitlines():
-            fn, err, path = line.split("\t", 2)
-            injected.append(Injection(fn, int(err), Path(path)))
+        for record in log.read_bytes().split(b"\0")[:-1]:
+            fn, err, path = record.split(b"\t", 2)
+            injected.append(Injection(fn.decode(), int(err), Path(os.fsdecode(path))))
     finally:
         log.unlink(missing_ok=True)
     return res, injected
