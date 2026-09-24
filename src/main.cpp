@@ -248,6 +248,26 @@ class FileUnlinkWorker {
 using Scheduler =
     cutils::TaskScheduler<FileUnlinkWorker, FileUnlinkWorker::kRanks>;
 
+/// @brief Whether the operand's last component is `.` or `..`.
+///
+/// POSIX has rm refuse such an operand with a diagnostic and do nothing more
+/// with it. Trailing slashes do not count, so `./` and `sub/..//` are refused
+/// too.
+constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
+  while (path.size() > 1 && path.back() == '/') {
+    path.remove_suffix(1);
+  }
+  const std::size_t slash = path.rfind('/');
+  const std::string_view last =
+      slash == std::string_view::npos ? path : path.substr(slash + 1);
+  return last == "." || last == "..";
+}
+
+static_assert(IsDotOrDotDotOperand("."));
+static_assert(IsDotOrDotDotOperand("sub/..//"));
+static_assert(!IsDotOrDotDotOperand(".hidden"));
+static_assert(!IsDotOrDotDotOperand("/"));
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -269,6 +289,13 @@ auto main(int argc, char** argv) -> int {
 
   std::size_t failures = 0;
   for (const char* path : cli_opts->positional) {
+    if (IsDotOrDotDotOperand(path)) {
+      std::println(stderr,
+                   "cannot remove '{}': '.' and '..' may not be removed", path);
+      ++failures;
+      continue;
+    }
+
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
       std::println(stderr, "cannot remove '{}': {}", path,
