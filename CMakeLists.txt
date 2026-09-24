@@ -32,6 +32,9 @@ if(REMMY_ENABLE_CLANG_TIDY)
   set(CMAKE_CXX_CLANG_TIDY "${REMMY_CLANG_TIDY}")
 endif()
 
+# Nothing here throws; keep exceptions off for every target, not per target.
+add_compile_options(-fno-exceptions)
+
 # cutils is a dependency here; its test suite has a separate standalone build.
 set(CUTILS_BUILD_TESTING OFF)
 add_subdirectory(cutils)

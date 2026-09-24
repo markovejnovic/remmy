@@ -13,7 +13,6 @@ FetchContent_Declare(Catch2
 FetchContent_MakeAvailable(Catch2)
 foreach(target IN ITEMS Catch2 Catch2WithMain)
   target_link_libraries(${target} PRIVATE cutils_test_options)
-  target_compile_options(${target} PRIVATE -fno-exceptions)
   target_compile_definitions(${target} PRIVATE _GLIBCXX_ASSERTIONS=1)
   set_target_properties(${target} PROPERTIES
     CXX_CLANG_TIDY "" INTERPROCEDURAL_OPTIMIZATION FALSE)
