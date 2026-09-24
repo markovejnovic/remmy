@@ -18,7 +18,6 @@ from faults import Fault, Injection, run_with_faults
 from fstree import Special, Symlink
 from hypothesis import assume, event, given, target
 from hypothesis import strategies as st
-from known_bugs import SWALLOWED_UNLINK_ERROR
 from pytest_check import check
 
 
@@ -45,7 +44,6 @@ def _rel(p: Path, root: Path) -> str:
 # --- Hard failures are reported, contained, and final ------------------------
 
 
-@SWALLOWED_UNLINK_ERROR
 def test_failed_unlink_is_reported_by_name(remmy_bin: Path, faultlib: Path, workdir: Path, threads: int) -> None:
     _tree(workdir)
 
@@ -336,7 +334,6 @@ def _allowed_survivors(inj: Injection, root: Path) -> set[str]:
     return blocked
 
 
-@SWALLOWED_UNLINK_ERROR
 @given(
     tree=strategies.trees.filter(bool),
     fn=FAULT_FNS,

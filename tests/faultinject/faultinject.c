@@ -18,8 +18,9 @@
 //                                 name=S  fail every call whose final path
 //                                         component is exactly S
 //                                 all     fail every call
-//   REMMY_FAULT_LOG   File that gets one line per injected failure:
-//                       FN <TAB> ERRNO <TAB> absolute path
+//   REMMY_FAULT_LOG   File that gets one NUL-terminated record per injected
+//                     failure (a path may hold any byte but NUL):
+//                       FN <TAB> ERRNO <TAB> absolute path <NUL>
 //   REMMY_FAULT_DT_UNKNOWN
 //                     If "1", rewrite every d_type returned by getdirentries
 //                     to DT_UNKNOWN, as some filesystems do.
@@ -217,11 +218,12 @@ static int Decide(enum Fn fn, int dirfd, const char* name) {
       char path[PATH_MAX];
       Resolve(dirfd, name, path);
       char line[PATH_MAX + 64];
-      int len = snprintf(line, sizeof line, "%s\t%d\t%s\n", kFnNames[fn],
-                         r->err, path);
+      int len =
+          snprintf(line, sizeof line, "%s\t%d\t%s", kFnNames[fn], r->err, path);
+      // Write through the terminating NUL, which ends the record.
       if (len > 0)
         (void)write(log_fd, line,
-                    (size_t)len < sizeof line ? (size_t)len : sizeof line - 1);
+                    (size_t)len < sizeof line ? (size_t)len + 1 : sizeof line);
     }
     return r->err;
   }
