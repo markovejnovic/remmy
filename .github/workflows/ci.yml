@@ -100,3 +100,41 @@ jobs:
       - run: cmake --build --preset ${{ matrix.preset }}
       # Runs the pytest end-to-end suite (tests/) against the built executable.
       - run: ctest --preset ${{ matrix.preset }}
+
+  # Linux runs GCC from Homebrew too: the presets name g++-16, and the runner's
+  # non-root user keeps the permission tests meaningful.
+  cutils-linux:
+    name: cutils (linux gcc asan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Put Homebrew on PATH
+        run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+      # The runner kernel's mmap randomisation can land on ASan's shadow memory.
+      - name: Lower mmap randomisation for ASan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - run: brew install gcc ninja
+      - name: Configure
+        run: cmake -S cutils -B build/cutils -G Ninja -DCMAKE_CXX_COMPILER=g++-16
+      - run: cmake --build build/cutils
+      - run: ctest --test-dir build/cutils --output-on-failure
+
+  remmy-linux:
+    name: remmy (linux ${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Put Homebrew on PATH
+        run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+      - run: brew install gcc ninja
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      # Runs the pytest end-to-end suite (tests/) against the built executable.
+      - run: ctest --preset ${{ matrix.preset }}

@@ -41,15 +41,29 @@ class Injection:
     path: Path
 
 
+if sys.platform == "darwin":
+    PRELOAD_VAR = "DYLD_INSERT_LIBRARIES"
+    LIB_NAME = "libfaultinject.dylib"
+    LINK_FLAGS = ["-dynamiclib"]
+elif sys.platform == "linux":
+    PRELOAD_VAR = "LD_PRELOAD"
+    LIB_NAME = "libfaultinject.so"
+    # Distro compilers default to _FORTIFY_SOURCE, which wraps the very libc
+    # calls this library defines.
+    LINK_FLAGS = ["-shared", "-fPIC", "-U_FORTIFY_SOURCE"]
+else:
+    PRELOAD_VAR = None
+
+
 def build_library(out_dir: Path) -> Path:
-    if sys.platform != "darwin":
-        pytest.skip("fault injection uses dyld interposing (macOS only)")
+    if PRELOAD_VAR is None:
+        pytest.skip(f"fault injection is not supported on {sys.platform}")
     cc = shutil.which("cc")
     if cc is None:
         pytest.skip("no C compiler for the fault-injection library")
-    lib = out_dir / "libfaultinject.dylib"
+    lib = out_dir / LIB_NAME
     subprocess.run(
-        [cc, "-std=c11", "-O1", "-Wall", "-Wextra", "-Werror", "-dynamiclib", "-o", lib, SOURCE],
+        [cc, "-std=c11", "-O1", "-Wall", "-Wextra", "-Werror", *LINK_FLAGS, "-o", lib, SOURCE],
         check=True,
         capture_output=True,
     )
@@ -71,8 +85,8 @@ def run_with_faults(
     os.close(fd)
     log = Path(name)
     env = {
-        # Append so a sanitizer runtime that also uses DYLD_INSERT_LIBRARIES keeps working.
-        "DYLD_INSERT_LIBRARIES": ":".join(p for p in (str(lib), os.environ.get("DYLD_INSERT_LIBRARIES", "")) if p),
+        # Append so a sanitizer runtime that also preloads itself keeps working.
+        PRELOAD_VAR: ":".join(p for p in (str(lib), os.environ.get(PRELOAD_VAR, "")) if p),
         "REMMY_FAULTS": ";".join(map(str, faults)),
         "REMMY_FAULT_LOG": str(log),
         "REMMY_FAULT_DT_UNKNOWN": "1" if dt_unknown else "0",

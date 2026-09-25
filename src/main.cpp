@@ -20,7 +20,7 @@
 /// Each pushed directory gets consumed by a worker. Each worker then walks
 /// through
 /// the directory (without statting this time around, rather relying on
-/// getdirentries64) and:
+/// getdirentries64, or getdents64 on Linux) and:
 ///
 ///   - For each file, it `unlink`s it.
 ///   - For each directory, it opens the directory and pushes it back into the
@@ -88,6 +88,45 @@ static auto ThreadCount() -> std::uint16_t {
   return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
 }
 
+/// @brief Whether to remove a directory that cannot be opened if it is empty.
+///
+/// GNU rm falls back to rmdir on a directory it cannot read, which succeeds
+/// when the directory is empty; BSD rm reports it. remmy follows the platform's
+/// rm.
+#if defined(__linux__)
+constexpr bool kRemoveUnopenableEmptyDirs = true;
+#else
+constexpr bool kRemoveUnopenableEmptyDirs = false;
+#endif
+
+/// @brief Try to remove the directory `name` under `dir` after opening it
+///        failed.
+///
+/// @return Whether the directory is gone. On false, errno is the open's again.
+auto RemoveUnopenableDir(const cutils::os::Fd& dir, const char* name) noexcept
+    -> bool {
+  if constexpr (kRemoveUnopenableEmptyDirs) {
+    const int open_errno = errno;
+    if (cutils::os::unlinkat(dir, name, AT_REMOVEDIR) == 0) {
+      return true;
+    }
+    errno = open_errno;
+  }
+  return false;
+}
+
+/// @copydoc RemoveUnopenableDir
+auto RemoveUnopenableDir(const char* path) noexcept -> bool {
+  if constexpr (kRemoveUnopenableEmptyDirs) {
+    const int open_errno = errno;
+    if (cutils::os::rmdir(path) == 0) {
+      return true;
+    }
+    errno = open_errno;
+  }
+  return false;
+}
+
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -132,10 +171,12 @@ class FileUnlinkWorker {
         // Note there's a small TOCTOU race here -- when we "note exhaustion"
         // inside of DirNode::Open, we _could_ have it return the exhaust FD
         // count we're using to avoid the TOCTOU race, but it's probably fine.
-        failures_++;
-        std::println(stderr, "cannot open '{}': {}",
-                     task->PathInto(path_buffer_),
-                     std::strerror(static_cast<int>(err)));
+        const char* path = task->PathInto(path_buffer_);
+        if (!RemoveUnopenableDir(path)) {
+          failures_++;
+          std::println(stderr, "cannot open '{}': {}", path,
+                       std::strerror(static_cast<int>(err)));
+        }
         MaybeCleanupDirNode(task);
       }
 
@@ -202,6 +243,9 @@ class FileUnlinkWorker {
                           O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
       if (!child_fd.IsOpen() && !exhausted) {
         if (!(errno == EMFILE || errno == ENFILE)) {
+          if (RemoveUnopenableDir(task->fd_, entry.c_str())) {
+            continue;
+          }
           failures_++;
           std::println(stderr, "cannot open '{}/{}': {}",
                        task->PathInto(path_buffer_), entry.name(),
@@ -328,6 +372,9 @@ auto main(int argc, char** argv) -> int {
     cutils::os::Fd dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd.IsOpen()) {
+      if (RemoveUnopenableDir(path)) {
+        continue;
+      }
       std::println(stderr, "cannot open '{}': {}", path, std::strerror(errno));
       ++failures;
       continue;

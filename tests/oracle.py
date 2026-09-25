@@ -23,7 +23,7 @@ def _shape(root: Path) -> dict[str, tuple[str, str | None]]:
 def _restore_modes(root: Path) -> None:
     for _, dirnames, _, dirfd in os.fwalk(root, follow_symlinks=False):
         for d in dirnames:
-            os.chmod(d, 0o755, dir_fd=dirfd, follow_symlinks=False)
+            fstree.chmod_nofollow(d, 0o755, dir_fd=dirfd)
 
 
 def compare_with_rm(remmy_bin: Path, root: Path, recipe: Recipe, args: list[str], threads: int = 4) -> None:

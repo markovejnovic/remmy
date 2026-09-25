@@ -27,9 +27,14 @@ struct HelpFirst {
   [[= cpplap::Short("-r")]] bool recursive = false;
 };
 
-using File = std::unique_ptr<std::FILE, decltype(&std::fclose)>;
+// A functor, not decltype(&std::fclose): glibc's attributes on fclose would be
+// dropped from the template argument, which GCC warns about.
+struct CloseFile {
+  void operator()(std::FILE* file) const noexcept { (void)std::fclose(file); }
+};
+using File = std::unique_ptr<std::FILE, CloseFile>;
 auto TempFile() -> File {
-  File file{std::tmpfile(), &std::fclose};
+  File file{std::tmpfile()};
   REQUIRE(file != nullptr);
   return file;
 }
