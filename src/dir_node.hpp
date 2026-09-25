@@ -114,9 +114,6 @@ struct DirNode {
   /// @brief Remove this (by now empty) directory.
   ///
   /// @param scratch A scratch buffer; it holds this node's path afterwards.
-  ///
-  /// Works on paths of any length, including those longer than PATH_MAX.
-  /// Returns 0 on success, or -1 with errno set, like rmdir.
   auto RemoveEmpty(std::string& scratch) const noexcept -> int;
 };
 
