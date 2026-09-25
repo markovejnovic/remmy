@@ -89,8 +89,8 @@ constexpr auto ApplyOption(Options& options, char letter) noexcept -> bool {
 /// Such a command line must be refused before anything is touched: -W without
 /// -r undeletes rather than removes. -W with -r only adds whiteouts to the
 /// walk, so it is safe to ignore there. -i, -I and -x depend on the operands;
-/// see the caller. -d, -P and -v never remove more than remmy already does
-/// without them.
+/// see the caller. -d is honoured (an operand directory is rmdir'ed), and -P
+/// and -v never remove more than remmy already does without them.
 constexpr auto UnsupportedOption(const Options& options) noexcept -> char {
   if (options.undelete && !options.recursive) {
     return 'W';

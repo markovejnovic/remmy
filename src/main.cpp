@@ -581,6 +581,17 @@ auto main(int argc, char** argv) -> int {
     }
 
     if (!cli->options.recursive) {
+      if (cli->options.dir) {
+        // -d: rmdir(2) the operand as given, so "l/" removes the link's
+        // target and "//" fails with EISDIR, and report errno like unlink.
+        if (cutils::os::rmdir(path) != 0) {
+          if (const int error = errno; Reportable(force, error)) {
+            ReportError(path, error);
+            ++failures;
+          }
+        }
+        continue;
+      }
       // rm's own text, not strerror(EISDIR)'s "Is a directory".
       WriteStderr({ProgramName(), ": ", path, ": is a directory\n"});
       ++failures;
