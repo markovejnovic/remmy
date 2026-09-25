@@ -13,11 +13,17 @@
 </div>
 
 <p align="center">
-  <img src=".github/res/time.png" alt="Median time to delete a 58,500-file tree: remmy with 4 threads 0.41 s, find | xargs rm with 4 jobs 0.73 s, bfs, GNU rm and find about 1.2 s, /bin/rm 1.27 s" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/res/time-dark.svg">
+    <img src=".github/res/time.svg" alt="Median time to delete a 58,500-file tree: remmy with 4 threads 0.41 s, find | xargs rm with 4 jobs 0.73 s, bfs, GNU rm and find about 1.2 s, /bin/rm 1.27 s" width="720">
+  </picture>
 </p>
 
 <p align="center">
-  <img src=".github/res/scaling.png" alt="Files deleted per second: remmy rises from 49k at 1 thread to 142k at 4 threads and falls to 106k at 8; xargs peaks at 80k at 4 jobs; rm is 46k" width="640">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/res/scaling-dark.svg">
+    <img src=".github/res/scaling.svg" alt="Files deleted per second: remmy rises from 49k at 1 thread to 142k at 4 threads and falls to 106k at 8; xargs peaks at 80k at 4 jobs; rm is 46k" width="640">
+  </picture>
 </p>
 
 Deleting a 58,500-file tree takes `/bin/rm` **1.27 s**. remmy does it in
@@ -48,7 +54,10 @@ thread remmy is level with the fastest single-threaded tools. With four it is
 three times faster than `rm`, and 1.8× faster than the best shell pipeline.
 
 <p align="center">
-  <img src=".github/res/speedup-by-tree.png" alt="Speedup over /bin/rm by tree shape at 4 threads: remmy 2.5 to 3.1 times on trees of 51k to 333k files, 1.5 times on 1 MiB files, and 0.48 times on a 125-file tree" width="720">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/res/speedup-by-tree-dark.svg">
+    <img src=".github/res/speedup-by-tree.svg" alt="Speedup over /bin/rm by tree shape at 4 threads: remmy 2.5 to 3.1 times on trees of 51k to 333k files, 1.5 times on 1 MiB files, and 0.48 times on a 125-file tree" width="720">
+  </picture>
 </p>
 
 Other trees tell the same story, with two exceptions:
@@ -59,7 +68,10 @@ Other trees tell the same story, with two exceptions:
   thread count does not change it, so it is a fixed startup cost.
 
 <p align="center">
-  <img src=".github/res/time-cold.png" alt="Median time to delete the 58,500-file tree after purging the cache: remmy with 4 threads 0.77 s, xargs with 4 jobs 0.82 s, /bin/rm 1.32 s, remmy with 1 thread 1.56 s" width="640">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/res/time-cold-dark.svg">
+    <img src=".github/res/time-cold.svg" alt="Median time to delete the 58,500-file tree after purging the cache: remmy with 4 threads 0.77 s, xargs with 4 jobs 0.82 s, /bin/rm 1.32 s, remmy with 1 thread 1.56 s" width="640">
+  </picture>
 </p>
 
 With a cold cache (`purge` before every run), remmy at 4 threads is 1.7× faster
