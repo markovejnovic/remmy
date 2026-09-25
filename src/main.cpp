@@ -115,25 +115,18 @@ class FileUnlinkWorker {
   /// This function is called by the scheduler periodically as new tasks are
   /// admitted into the scheduler.
   void Process(DirNode* task, auto& ctx) noexcept {
-    const std::uint64_t epoch = cutils::os::limits::fd::Pool::Epoch();
     auto open_result = task->Open(path_buffer_);
     if (!open_result) {
-      const std::errc err = open_result.error();
-      // Out of descriptors: if one of ours may have held the refused slot, it
-      // is or will be freed, so park the directory and retry it later. Asking
-      // Live() alone would race: another worker can hold the last descriptor
-      // when the open fails and close it before we look.
-      if ((err == std::errc::too_many_files_open_in_system ||
-           err == std::errc::too_many_files_open) &&
-          cutils::os::limits::fd::Pool::MayHaveFreed(epoch)) {
+      const cutils::os::OpenError err = open_result.error();
+      if (err.retryable) {
+        // Out of descriptors, but one of ours is or will be freed: park the
+        // directory and retry it later.
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
-        // None of ours held a descriptor through the attempt, so waiting for
-        // our own to be freed cannot help.
         failures_++;
         std::println(stderr, "cannot open '{}': {}",
                      task->PathInto(path_buffer_),
-                     std::strerror(static_cast<int>(err)));
+                     std::strerror(static_cast<int>(err.code)));
         MaybeCleanupDirNode(task);
       }
 
@@ -180,21 +173,21 @@ class FileUnlinkWorker {
         continue;
       }
 
-      const bool exhausted = cutils::os::limits::fd::Pool::Exhausted();
-      cutils::os::Fd child_fd =
-          exhausted ? cutils::os::Fd{}
-                    : cutils::os::openat(
-                          task->fd_, entry.c_str(),
-                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-      if (!child_fd.IsOpen() && !exhausted) {
-        if (!(errno == EMFILE || errno == ENFILE)) {
+      // Near the ceiling, skip the attempt and park the child straight away.
+      cutils::os::Fd child_fd;
+      if (!cutils::os::limits::fd::Pool::Exhausted()) {
+        auto opened =
+            cutils::os::openat(task->fd_, entry.c_str(),
+                               O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (opened) {
+          child_fd = *std::move(opened);
+        } else if (!opened.error().retryable) {
           failures_++;
           std::println(stderr, "cannot open '{}/{}': {}",
                        task->PathInto(path_buffer_), entry.name(),
-                       std::strerror(errno));
+                       std::strerror(static_cast<int>(opened.error().code)));
           continue;
         }
-        cutils::os::limits::fd::Pool::NoteExhaustion();
       }
 
       // Count the child on the parent before publishing it: a worker could
@@ -291,16 +284,17 @@ auto main(int argc, char** argv) -> int {
       continue;
     }
 
-    cutils::os::Fd dirfd =
+    auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (!dirfd.IsOpen()) {
-      std::println(stderr, "cannot open '{}': {}", path, std::strerror(errno));
+    if (!dirfd) {
+      std::println(stderr, "cannot open '{}': {}", path,
+                   std::strerror(static_cast<int>(dirfd.error().code)));
       ++failures;
       continue;
     }
 
     // Seeding precedes Run, so this is still single-threaded.
-    SeedRoot(scheduler, std::move(dirfd), path);
+    SeedRoot(scheduler, *std::move(dirfd), path);
   }
 
   (void)scheduler.Wait();

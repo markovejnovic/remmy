@@ -16,39 +16,27 @@
 namespace cutils::os::limits::fd {
 namespace {
 
-// Leased descriptors, and how many have been released so far (the epoch).
-struct Leases {
-  std::uint32_t live;
-  std::uint32_t epoch;
-};
-
-// Leases packed into one atomic word, live in the low half and the epoch in
-// the high half: a release is one read-modify-write that both frees a lease
-// and advances the epoch, and a single load sees both at once.
 class AtomicLeases {
  public:
   [[nodiscard]] auto Load() const noexcept -> Leases {
     return Unpack(bits_.load(std::memory_order_relaxed));
   }
 
-  /// Returns the leases as they stand after this acquire.
   auto Acquire() noexcept -> Leases {
-    return Unpack(bits_.fetch_add(kAcquire, std::memory_order_relaxed) +
-                  kAcquire);
+    return Unpack(bits_.fetch_add(kAcquire, std::memory_order_relaxed));
   }
 
   void Release() noexcept {
     bits_.fetch_add(kRelease, std::memory_order_relaxed);
   }
 
-  void Abandon() noexcept {
+  void Forget() noexcept {
     bits_.fetch_sub(kAcquire, std::memory_order_relaxed);
   }
 
  private:
   static constexpr int kEpochShift = 32;
   static constexpr std::uint64_t kAcquire = 1;
-  // Adding this drops the live count by one and carries one into the epoch.
   static constexpr std::uint64_t kRelease =
       (std::uint64_t{1} << kEpochShift) - kAcquire;
 
@@ -158,44 +146,45 @@ auto SetMax() noexcept -> std::expected<std::uint64_t, std::errc> {
   return target;
 }
 
-auto Pool::Live() noexcept -> std::uint64_t {
-  return leases.Load().live;
-}
-
 auto Pool::Capacity() noexcept -> std::uint64_t { return CapacityImpl(); }
-
-void Pool::NoteAcquired() noexcept { RaiseIfNeeded(leases.Acquire().live); }
-
-void Pool::NoteReleased() noexcept { leases.Release(); }
-
-void Pool::NoteAbandoned() noexcept { leases.Abandon(); }
-
-auto Pool::Epoch() noexcept -> std::uint64_t { return leases.Load().epoch; }
-
-auto Pool::MayHaveFreed(std::uint64_t epoch) noexcept -> bool {
-  // Relaxed suffices: a descriptor that held the refused slot was counted
-  // before its open, the kernel ordered that open before the refusal, and the
-  // caller loads after the refusal. Coherence of the one atomic then shows the
-  // lease, or a later state whose epoch has moved past it.
-  const auto now = leases.Load();
-  return now.live != 0 || now.epoch != epoch;
-}
-
-void Pool::NoteExhaustion() noexcept {
-  const auto live = Live();
-  if (live == 0) {
-    return;  // Nothing of ours was open; the pressure is not ours to model.
-  }
-  auto ceiling = observed_ceiling.load(std::memory_order_relaxed);
-  while ((ceiling == 0 || live < ceiling) &&
-         !observed_ceiling.compare_exchange_weak(ceiling, live,
-                                                 std::memory_order_relaxed)) {
-  }
-}
 
 auto Pool::Exhausted() noexcept -> bool {
   const auto ceiling = observed_ceiling.load(std::memory_order_relaxed);
-  return ceiling != 0 && Live() >= ceiling;
+  return ceiling != 0 && leases.Load().live >= ceiling;
+}
+
+auto Pool::Reserve() noexcept -> Reservation {
+  const auto before = leases.Acquire();
+  RaiseIfNeeded(std::uint64_t{before.live} + 1);
+  return Reservation{before};
+}
+
+void Pool::Release() noexcept { leases.Release(); }
+
+void Pool::Forget() noexcept { leases.Forget(); }
+
+Pool::Reservation::~Reservation() {
+  if (armed_) {
+    leases.Forget();  // The open failed: no slot was handed out, none freed.
+  }
+}
+
+void Pool::Reservation::Claim() && noexcept { armed_ = false; }
+
+auto Pool::Reservation::Refused() && noexcept -> bool {
+  armed_ = false;
+  leases.Forget();
+
+  if (const std::uint64_t held = before_.live; held != 0) {
+    auto ceiling = observed_ceiling.load(std::memory_order_relaxed);
+    while ((ceiling == 0 || held < ceiling) &&
+           !observed_ceiling.compare_exchange_weak(ceiling, held,
+                                                   std::memory_order_relaxed)) {
+    }
+  }
+
+  const auto now = leases.Load();
+  return now.live != 0 || now.epoch != before_.epoch;
 }
 
 }  // namespace cutils::os::limits::fd

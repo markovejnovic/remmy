@@ -12,6 +12,10 @@
 #include <expected>
 #include <system_error>
 
+namespace cutils::os {
+class Fd;
+}  // namespace cutils::os
+
 namespace cutils::os::limits::fd {
 
 /// @brief Report the current soft file-descriptor limit, clamped to the
@@ -25,50 +29,64 @@ namespace cutils::os::limits::fd {
 /// @brief Raise the soft limit to the highest value currently permitted.
 [[nodiscard]] auto SetMax() noexcept -> std::expected<std::uint64_t, std::errc>;
 
+/// @brief Leased descriptors, and how many have been released so far.
+struct Leases {
+  std::uint32_t live;
+  std::uint32_t epoch;
+};
+
 /// @brief Tracks how many file descriptors this process holds relative to the
 ///        limit, raising it when leases approach capacity.
 class Pool {
  public:
-  /// @brief The number of file descriptors currently leased.
-  [[nodiscard]] static auto Live() noexcept -> std::uint64_t;
-
   /// @brief The number of file descriptors we can currently open.
   [[nodiscard]] static auto Capacity() noexcept -> std::uint64_t;
 
-  /// @brief Record that a file descriptor was leased, raising the soft limit
-  ///        once the pool crosses its raise threshold.
-  static void NoteAcquired() noexcept;
-
-  /// @brief Record that a leased file descriptor was released.
-  static void NoteReleased() noexcept;
-
-  /// @brief Record that an open counted by NoteAcquired beforehand failed.
-  ///
-  /// Unlike NoteReleased, this does not advance the Epoch: the kernel never
-  /// handed out a descriptor, so none was freed.
-  static void NoteAbandoned() noexcept;
-
-  /// @brief How many leased descriptors have been released so far.
-  ///
-  /// Snapshot it before an open, for MayHaveFreed.
-  [[nodiscard]] static auto Epoch() noexcept -> std::uint64_t;
-
-  /// @brief Whether an open refused for lack of descriptors, attempted after
-  ///        `epoch` was taken, could succeed if retried.
-  ///
-  /// True when one of our descriptors is leased or being opened now, or one
-  /// was released since `epoch`: any of them may have held the slot the kernel
-  /// refused, and it is or will be freed. False means none of ours held a slot
-  /// through the attempt, so the pressure is not ours and waiting cannot help.
-  /// Exact only for descriptors counted before their open (see Fd::Open).
-  [[nodiscard]] static auto MayHaveFreed(std::uint64_t epoch) noexcept -> bool;
-
-  /// @brief Record that opening a file descriptor was refused, teaching the
-  ///        pool where the practical ceiling is.
-  static void NoteExhaustion() noexcept;
-
-  /// @brief Whether leases have reached the observed exhaustion ceiling.
+  /// @brief Whether leases have reached the observed exhaustion ceiling, so an
+  ///        open now would likely be refused.
   [[nodiscard]] static auto Exhausted() noexcept -> bool;
+
+ private:
+  friend class cutils::os::Fd;
+
+  /// @brief A lease taken ahead of an open. Claimed by the Fd it opens, or
+  ///        consumed by Refused; otherwise dropped on destruction, freeing no
+  ///        slot.
+  class [[nodiscard]] Reservation {
+   public:
+    Reservation(const Reservation&) = delete;
+    Reservation(Reservation&&) = delete;
+    auto operator=(const Reservation&) -> Reservation& = delete;
+    auto operator=(Reservation&&) -> Reservation& = delete;
+    ~Reservation();
+
+    /// @brief Hand the lease to the descriptor that was opened.
+    void Claim() && noexcept;
+
+    /// @brief Record that the open was refused for lack of descriptors.
+    ///
+    /// @return Whether a retry could succeed: one of ours is leased now, or
+    ///         was released since this reservation, so may have held the slot.
+    auto Refused() && noexcept -> bool;
+
+   private:
+    friend class Pool;
+    explicit Reservation(Leases before) noexcept : before_(before) {}
+
+    Leases before_;
+    bool armed_ = true;
+  };
+
+  /// @brief Lease a descriptor ahead of opening it, raising the soft limit
+  ///        once the pool crosses its raise threshold.
+  static auto Reserve() noexcept -> Reservation;
+
+  /// @brief Return a lease whose descriptor was closed, advancing the epoch.
+  static void Release() noexcept;
+
+  /// @brief Return a lease whose descriptor was handed off still open. The
+  ///        epoch stays put.
+  static void Forget() noexcept;
 };
 
 }  // namespace cutils::os::limits::fd

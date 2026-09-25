@@ -33,14 +33,16 @@ extern "C" auto __getdirentries64(int fd, void* buffer, std::size_t size,
 
 namespace cutils::os {
 
-/// @brief Returns an owning Fd; an empty one means failure, with errno set.
-[[nodiscard]] inline auto open(const char* path, int flags) noexcept -> Fd {
+/// @brief Returns an owning Fd, or why it could not be opened.
+[[nodiscard]] inline auto open(const char* path, int flags) noexcept
+    -> std::expected<Fd, OpenError> {
   return Fd::Open([&] { return ::open(path, flags); });
 }
 
-/// @brief Returns an owning Fd; an empty one means failure, with errno set.
+/// @brief Returns an owning Fd, or why it could not be opened.
 [[nodiscard]] inline auto openat(const Fd& dir, const char* name,
-                                 int flags) noexcept -> Fd {
+                                 int flags) noexcept
+    -> std::expected<Fd, OpenError> {
   return Fd::Open([&] { return ::openat(dir.get(), name, flags); });
 }
 

@@ -8,17 +8,28 @@
 
 #include <unistd.h>
 
+#include <cerrno>
 #include <concepts>
 #include <cutils/exceptions/exceptions.hpp>
 #include <cutils/os/limits/fd.hpp>
+#include <expected>
 #include <functional>
 #include <initializer_list>
 #include <limits>
 #include <optional>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
 namespace cutils::os {
+
+/// @brief Why Fd::Open failed.
+struct OpenError {
+  std::errc code;
+
+  /// @brief Refused for lack of descriptors while one of ours held. Retry.
+  bool retryable;
+};
 
 /// @brief Type-safe, file descriptor that closes itself and counts itself
 /// against cutils::os::limits::fd::Pool while open.
@@ -32,30 +43,24 @@ class Fd {
 
   Fd() noexcept = default;
 
-  /// @brief Adopt an already open descriptor, counting it from now on.
-  ///
-  /// Prefer Open: until this runs, the pool cannot see the descriptor.
-  explicit Fd(int descriptor) noexcept : fd_(descriptor) {
-    if (fd_ >= 0) {
-      limits::fd::Pool::NoteAcquired();
-    }
-  }
-
-  /// @brief Open a descriptor with `open_fn` (returning one, or -1 with errno
-  ///        set), counted against the pool from before the syscall.
-  ///
-  /// So the pool never misses a slot the kernel has handed out, which
-  /// Pool::MayHaveFreed relies on. An empty Fd means failure, errno intact.
+  /// @brief Open a descriptor with `open_fn`, which returns one, or an error.
   template <std::invocable OpenFn>
-  [[nodiscard]] static auto Open(OpenFn&& open_fn) noexcept -> Fd {
-    limits::fd::Pool::NoteAcquired();
-    Fd out;
-    out.fd_ = std::forward<OpenFn>(open_fn)();
-    if (out.fd_ < 0) {
-      out.fd_ = kInvalid;
-      limits::fd::Pool::NoteAbandoned();
+  [[nodiscard]] static auto Open(OpenFn&& open_fn) noexcept
+      -> std::expected<Fd, OpenError> {
+    auto reservation = limits::fd::Pool::Reserve();
+    const int descriptor = std::forward<OpenFn>(open_fn)();
+    if (descriptor >= 0) {
+      return Fd{std::move(reservation), descriptor};
     }
-    return out;
+
+    const auto code = static_cast<std::errc>(errno);
+    const bool out_of_descriptors =
+        code == std::errc::too_many_files_open ||
+        code == std::errc::too_many_files_open_in_system;
+    return std::unexpected(OpenError{
+        .code = code,
+        .retryable = out_of_descriptors && std::move(reservation).Refused(),
+    });
   }
 
   Fd(const Fd&) = delete;
@@ -82,7 +87,7 @@ class Fd {
   /// @brief Give up ownership without closing.
   [[nodiscard]] auto Release() noexcept -> int {
     if (fd_ >= 0) {
-      limits::fd::Pool::NoteReleased();
+      limits::fd::Pool::Forget();
     }
     return std::exchange(fd_, kInvalid);
   }
@@ -91,13 +96,24 @@ class Fd {
   void Close() noexcept {
     if (fd_ >= 0) {
       ::close(fd_);
-      limits::fd::Pool::NoteReleased();
+      limits::fd::Pool::Release();
     }
 
     fd_ = kInvalid;
   }
 
  private:
+  friend class std::optional<Fd>;
+
+  /// @brief Own a descriptor opened under `reservation`.
+  Fd(limits::fd::Pool::Reservation&& reservation, int descriptor) noexcept
+      : fd_(descriptor) {
+    std::move(reservation).Claim();
+  }
+
+  /// @brief Hold a sentinel, for std::optional<Fd>. Never a descriptor.
+  explicit Fd(int sentinel) noexcept : fd_(sentinel) {}
+
   int fd_ = kInvalid;
 };
 
