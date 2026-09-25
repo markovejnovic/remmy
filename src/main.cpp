@@ -304,6 +304,39 @@ auto ReportUsage(std::string_view argv0, remmy::UsageError error) noexcept
   return remmy::kExitUsage;
 }
 
+/// @brief Whether BSD rm's -I would ask before removing these operands.
+///
+/// rm asks once when, among the operands that exist (lstat(2)) and are not
+/// "." or "..", there is a directory under -r or -R, or more than three in
+/// all. Otherwise -I changes nothing.
+auto PromptOnceWouldAsk(std::span<char* const> operands,
+                        bool recursive) noexcept -> bool {
+  static constexpr std::size_t kMaxSilentOperands = 3;
+  std::size_t existing = 0;
+  for (const char* path : operands) {
+    struct stat path_stat;
+    if (IsDotOrDotDotOperand(path) ||
+        cutils::os::lstat(path, &path_stat) != 0) {
+      continue;
+    }
+    if (recursive && S_ISDIR(path_stat.st_mode)) {
+      return true;
+    }
+    ++existing;
+  }
+  return existing > kMaxSilentOperands;
+}
+
+/// @brief Refuses a command line remmy cannot yet honour safely; returns 1.
+///
+/// Ignoring -i, -I, -W or -x would remove what rm would ask about or keep, so
+/// nothing is touched instead.
+auto ReportUnsupported(std::string_view argv0, char option) noexcept -> int {
+  WriteStderr({argv0, ": -", std::string_view(&option, 1),
+               ": not supported yet; nothing was removed\n"});
+  return 1;
+}
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -321,6 +354,16 @@ auto main(int argc, char** argv) -> int {
   const auto cli = remmy::ParseCli(args.empty() ? args : args.subspan(1));
   if (!cli) {
     return ReportUsage(argv0, cli.error());
+  }
+  if (!cli->operands.empty()) {
+    if (const char option = remmy::UnsupportedOption(cli->options);
+        option != '\0') {
+      return ReportUnsupported(argv0, option);
+    }
+    if (cli->options.prompt_once &&
+        PromptOnceWouldAsk(cli->operands, cli->options.recursive)) {
+      return ReportUnsupported(argv0, 'I');
+    }
   }
 
   const std::uint16_t threads = ThreadCount();
