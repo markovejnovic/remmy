@@ -22,9 +22,10 @@ HIGHLIGHT = "remmy"
 
 @dataclass(frozen=True, slots=True)
 class Theme:
-    """Colors for one page background. Figures are transparent, so the page shows through."""
+    """Colors for one chart background. The background is painted in, so a chart reads on any page."""
 
     suffix: str
+    surface: str
     ink: str
     ink_secondary: str
     muted: str
@@ -40,6 +41,7 @@ class Theme:
 
 LIGHT = Theme(
     suffix="",
+    surface="#fcfcfb",
     ink="#0b0b0b",
     ink_secondary="#52514e",
     muted="#898781",
@@ -51,6 +53,7 @@ LIGHT = Theme(
 )
 DARK = Theme(
     suffix="-dark",
+    surface="#1a1a19",
     ink="#ffffff",
     ink_secondary="#c3c2b7",
     muted="#898781",
@@ -117,9 +120,9 @@ def _styled(theme: Theme) -> Iterator[None]:
         "ytick.major.pad": 6,
         "legend.frameon": False,
         "legend.fontsize": 9.5,
-        "figure.facecolor": "none",
-        "axes.facecolor": "none",
-        "savefig.transparent": True,
+        "figure.facecolor": theme.surface,
+        "axes.facecolor": theme.surface,
+        "savefig.facecolor": theme.surface,
         "svg.fonttype": "path",
     }
     with plt.rc_context(rc):
@@ -127,7 +130,7 @@ def _styled(theme: Theme) -> Iterator[None]:
 
 
 def _save(fig: plt.Figure, path: Path) -> Path:
-    fig.savefig(path, bbox_inches="tight", pad_inches=0.15)
+    fig.savefig(path, bbox_inches="tight", pad_inches=0.3)
     plt.close(fig)
     return path
 
