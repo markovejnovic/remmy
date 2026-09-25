@@ -74,77 +74,6 @@ def mark_known_gaps(items: list[pytest.Item]) -> None:
 
 
 GAPS: dict[str, Gap] = {
-    "dot-slash-guards": Gap(
-        reason=(
-            "Before anything is removed, every operand whose last component is '.' or '..' is dropped and a "
-            'single \'rm: "." and ".." may not be removed\' is printed for the whole command line; then an operand '
-            "that is exactly '/' is refused with 'rm: \"/\" may not be removed' (with or without -r) while '//' is "
-            "an ordinary directory. remmy reports each dot operand in place with its own text, and walks '/'."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[d_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[dir_slash_dotdot_slash]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[dot_and_slash_order]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[dot_err_then_missing]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[dotdot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[dotdot_nor]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[f_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[f_dotdot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[i_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_a_dot_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_d_dot_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dir_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dir_dot_from_parent_sb]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dir_dot_slash]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dir_dotdot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dot_dot_slash]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dot_from_subdir]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dot_slash]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dot_trailing_slash]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dotdot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dotdot_from_subdir]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dotslashslash]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_file_and_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[rf_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[rf_dot_and_file]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[ri_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_and_dot]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_d]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_dot_rf_sandboxed]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_dot_slash_nor]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_dotdot_rf_sandboxed]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_f]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_no_r]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_r_sandboxed]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_rf_and_file_sandboxed]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_rf_notsandbox_check]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_rf_sandboxed]",
-                "test_rm_parity_cli.py::test_legacy_command_mode[legacy_dot]",
-                "test_rm_parity_cli.py::test_prompt_once_I[I_4files_one_dot]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[dot_after_missing]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[dot_after_symlink_to_dir]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[dotdot_after_file]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[dotdot_after_missing]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[dotdot_last_component_forms]",
-                "test_rm_parity_edges.py::test_misc[legacy_dotdot]",
-                "test_rm_parity_edges.py::test_misc[legacy_slash]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dir_dot_slash]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dir_slash_dot]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dir_slash_dotdot]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dot]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dot_f]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dot_mixed_with_missing]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dot_no_r]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dot_slash]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dotdot]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dotdot_slash]",
-                "test_rm_parity_fs.py::test_names[esc_name_dot_dir]",
-            }
-        ),
-    ),
     "directory-d": Gap(
         reason=(
             "-d without -r removes a directory with rmdir(2): an empty one goes, a non-empty one fails with "
@@ -292,7 +221,8 @@ GAPS: dict[str, Gap] = {
             "When basename(argv[0]) is 'unlink', rm acts as unlink(1): no options, a leading '--' is skipped only "
             "before a single operand, anything but exactly one operand prints the usage and exits 64, and the "
             "operand is unlink(2)ed ('is a directory' for directories including '.', '..' and '/'; no dot or "
-            "slash guard, no prompts)."
+            "slash guard, no prompts). remmy skips the guards only for that accepted shape; in any other "
+            "unlink-mode shape it still refuses '.', '..' and '/' (exit 1) instead of printing the usage."
         ),
         cases=frozenset(
             {
@@ -301,13 +231,16 @@ GAPS: dict[str, Gap] = {
                 "test_rm_parity_cli.py::test_invocation_names[unlink_dashdash_only]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_dashdash_two]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_mode_dash_v_file]",
-                "test_rm_parity_cli.py::test_invocation_names[unlink_mode_dot]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_opt_f]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_opt_f_file]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_two]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_argv0_rf_dot]",
                 "test_rm_parity_edges.py::test_unlink_mode[unlink_dash_then_second]",
                 "test_rm_parity_edges.py::test_unlink_mode[unlink_dashdash_prefixed_name]",
-                "test_rm_parity_edges.py::test_unlink_mode[unlink_dotdot]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_r_dotdot_from_subdir]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_r_nested_dotdot]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_rf_dot]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_rf_slash_sandboxed]",
                 "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_flag]",
                 "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_two]",
                 "test_rm_parity_fs.py::test_invocation_names[exe_rm_argv0_unlink_two_operands]",

@@ -70,6 +70,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "cli.hpp"
 #include "dir_node.hpp"
@@ -368,6 +369,70 @@ constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
   return last == "." || last == "..";
 }
 
+/// @brief The operands left once BSD rm's guards have dropped theirs.
+struct GuardedOperands {
+  std::vector<const char*> kept;
+  /// @brief Whether a guard dropped an operand, which makes rm exit 1.
+  bool refused = false;
+};
+
+/// @brief BSD rm's checkdot(), then its checkslash().
+///
+/// Before anything is removed, rm drops every operand whose last component is
+/// "." or "..", then every operand that is exactly "/" ("//" is an ordinary
+/// directory), and says so once per guard for the whole command line, dot
+/// first, whatever the options (-f included). The rest keep their order.
+auto ApplyGuards(std::span<const char* const> operands) noexcept
+    -> GuardedOperands {
+  GuardedOperands out;
+  out.kept.reserve(operands.size());
+  bool dot = false;
+  bool slash = false;
+  for (const char* path : operands) {
+    if (IsDotOrDotDotOperand(path)) {
+      dot = true;
+    } else if (std::string_view(path) == "/") {
+      slash = true;
+    } else {
+      out.kept.push_back(path);
+    }
+  }
+
+  if (dot) {
+    WriteStderr({ProgramName(), ": \".\" and \"..\" may not be removed\n"});
+  }
+  if (slash) {
+    WriteStderr({ProgramName(), ": \"/\" may not be removed\n"});
+  }
+  out.refused = dot || slash;
+  return out;
+}
+
+/// @brief Whether rm runs as unlink(1): argv[0]'s last component, as given
+///        (not getprogname(3)), is "unlink".
+constexpr auto IsUnlinkMode(std::string_view argv0) noexcept -> bool {
+  const std::size_t slash = argv0.rfind('/');
+  return (slash == std::string_view::npos ? argv0 : argv0.substr(slash + 1)) ==
+         "unlink";
+}
+
+/// @brief Whether BSD rm skips its guards for this command line.
+///
+/// Only unlink(1)'s one accepted shape, `unlink file` or `unlink -- file`,
+/// goes straight to unlink(2) without them; there "." and "/" are directories
+/// like any other. Every other unlink-mode command line is a usage error to
+/// rm and removes nothing, so until remmy reports those the same way, it keeps
+/// the guards for them: an option such as -r must never walk ".", ".." or "/".
+constexpr auto SkipsGuards(std::string_view argv0, std::span<char* const> args,
+                           std::size_t operand_count) noexcept -> bool {
+  if (!IsUnlinkMode(argv0) || operand_count != 1) {
+    return false;
+  }
+  // args excludes argv[0]: exactly the operand, or "--" and the operand.
+  return args.size() == 1 ||
+         (args.size() == 2 && std::string_view(args.front()) == "--");
+}
+
 /// @brief Prints BSD rm's answer to a rejected command line; returns 64.
 ///
 /// Like getopt(3), the illegal-option line names argv[0] exactly as given.
@@ -385,17 +450,16 @@ auto ReportUsage(std::string_view argv0, remmy::UsageError error) noexcept
 
 /// @brief Whether BSD rm's -I would ask before removing these operands.
 ///
-/// rm asks once when, among the operands that exist (lstat(2)) and are not
-/// "." or "..", there is a directory under -r or -R, or more than three in
-/// all. Otherwise -I changes nothing.
-auto PromptOnceWouldAsk(std::span<char* const> operands,
+/// rm asks once when, among the operands that exist (lstat(2)) and passed
+/// its guards (see ApplyGuards), there is a directory under -r or -R, or more
+/// than three in all. Otherwise -I changes nothing.
+auto PromptOnceWouldAsk(std::span<const char* const> operands,
                         bool recursive) noexcept -> bool {
   static constexpr std::size_t kMaxSilentOperands = 3;
   std::size_t existing = 0;
   for (const char* path : operands) {
     struct stat path_stat;
-    if (IsDotOrDotDotOperand(path) ||
-        cutils::os::lstat(path, &path_stat) != 0) {
+    if (cutils::os::lstat(path, &path_stat) != 0) {
       continue;
     }
     if (recursive && S_ISDIR(path_stat.st_mode)) {
@@ -409,28 +473,28 @@ auto PromptOnceWouldAsk(std::span<char* const> operands,
 /// @brief Whether BSD rm's -i would ask before removing any of these operands.
 ///
 /// An effective -i (so not one a later -f overrode) asks before every removal,
-/// but rm reports an operand that is missing (lstat(2)), "." or "..", or a
-/// directory without -r, -R or -d straight away, without asking.
-auto InteractiveWouldAsk(std::span<char* const> operands,
+/// but rm reports an operand that is missing (lstat(2)) or a directory without
+/// -r, -R or -d straight away, without asking. The operands have passed rm's
+/// guards (see ApplyGuards), which never ask either.
+auto InteractiveWouldAsk(std::span<const char* const> operands,
                          const remmy::Options& options) noexcept -> bool {
   const bool removes_dirs = options.recursive || options.dir;
   return std::ranges::any_of(operands, [removes_dirs](const char* path) {
     struct stat path_stat;
-    return !IsDotOrDotDotOperand(path) &&
-           cutils::os::lstat(path, &path_stat) == 0 &&
+    return cutils::os::lstat(path, &path_stat) == 0 &&
            (removes_dirs || !S_ISDIR(path_stat.st_mode));
   });
 }
 
 /// @brief Whether BSD rm's -x (with -r or -R) could keep anything of these
 ///        operands: only a walk crosses devices, so only when one of them is
-///        a directory (lstat(2)) that rm would walk, not "." or "..".
-auto OneFileSystemWouldMatter(std::span<char* const> operands) noexcept
+///        a directory (lstat(2)) that rm would walk. The operands have passed
+///        rm's guards (see ApplyGuards).
+auto OneFileSystemWouldMatter(std::span<const char* const> operands) noexcept
     -> bool {
   return std::ranges::any_of(operands, [](const char* path) {
     struct stat path_stat;
-    return !IsDotOrDotDotOperand(path) &&
-           cutils::os::lstat(path, &path_stat) == 0 &&
+    return cutils::os::lstat(path, &path_stat) == 0 &&
            S_ISDIR(path_stat.st_mode);
   });
 }
@@ -459,25 +523,32 @@ auto main(int argc, char** argv) -> int {
   const std::span<char* const> args(
       argv, static_cast<std::size_t>(argc > 0 ? argc : 0));
   const char* argv0 = args.empty() ? "rm" : args.front();
-  const auto cli = remmy::ParseCli(args.empty() ? args : args.subspan(1));
+  const auto rest = args.empty() ? args : args.subspan(1);
+  const auto cli = remmy::ParseCli(rest);
   if (!cli) {
     return ReportUsage(argv0, cli.error());
   }
-  if (!cli->operands.empty()) {
+  const GuardedOperands guarded =
+      SkipsGuards(argv0, rest, cli->operands.size())
+          ? GuardedOperands{.kept = {cli->operands.begin(),
+                                     cli->operands.end()}}
+          : ApplyGuards(cli->operands);
+  const std::span<const char* const> operands(guarded.kept);
+  if (!operands.empty()) {
     if (const char option = remmy::UnsupportedOption(cli->options);
         option != '\0') {
       return ReportUnsupported(argv0, option);
     }
     if (cli->options.interactive &&
-        InteractiveWouldAsk(cli->operands, cli->options)) {
+        InteractiveWouldAsk(operands, cli->options)) {
       return ReportUnsupported(argv0, 'i');
     }
     if (cli->options.prompt_once &&
-        PromptOnceWouldAsk(cli->operands, cli->options.recursive)) {
+        PromptOnceWouldAsk(operands, cli->options.recursive)) {
       return ReportUnsupported(argv0, 'I');
     }
     if (cli->options.one_file_system && cli->options.recursive &&
-        OneFileSystemWouldMatter(cli->operands)) {
+        OneFileSystemWouldMatter(operands)) {
       return ReportUnsupported(argv0, 'x');
     }
   }
@@ -488,15 +559,8 @@ auto main(int argc, char** argv) -> int {
   prototype.force_ = force;
   Scheduler scheduler(threads, prototype);
 
-  std::size_t failures = 0;
-  for (const char* path : cli->operands) {
-    if (IsDotOrDotDotOperand(path)) {
-      WriteStderr(
-          {"cannot remove '", path, "': '.' and '..' may not be removed\n"});
-      ++failures;
-      continue;
-    }
-
+  std::size_t failures = guarded.refused ? 1 : 0;
+  for (const char* path : operands) {
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
       if (const int error = errno; StatFailureReportable(cli->options, error)) {
