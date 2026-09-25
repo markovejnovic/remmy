@@ -39,19 +39,25 @@ add_compile_options(-fno-exceptions)
 set(CUTILS_BUILD_TESTING OFF)
 add_subdirectory(cutils)
 
+set(REMMY_SOURCES src/main.cpp src/dir_node.cpp)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
-  add_executable(remmy src/main.cpp src/dir_node.cpp)
+  add_executable(remmy ${REMMY_SOURCES})
   target_link_libraries(remmy PRIVATE cutils::cutils)
-  target_compile_options(remmy PRIVATE -freflection)
   target_link_options(remmy PRIVATE -static-libstdc++ -static-libgcc
     -Wl,-exported_symbol,_main)
   cutils_harden(remmy)
-  # Clang tools cannot parse the reflecting entry point.
+  # clang-tidy lints these sources in the Clang build below; it cannot take
+  # the GCC-only flags this target compiles with.
   set_property(TARGET remmy PROPERTY CXX_CLANG_TIDY "")
 elseif(REMMY_ENABLE_CLANG_TIDY AND CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|AppleClang)$")
-  message(STATUS "Clang: linting cutils with clang-tidy, not building remmy")
+  # The shipped binary is GCC's; under Clang, compile remmy's sources only so
+  # clang-tidy checks them alongside cutils.
+  message(STATUS "Clang: linting cutils and remmy's sources, not linking remmy")
+  add_library(remmy_lint OBJECT ${REMMY_SOURCES})
+  target_link_libraries(remmy_lint PRIVATE cutils::cutils)
+  cutils_harden(remmy_lint)
 else()
-  message(FATAL_ERROR "remmy requires GCC 16 reflection; use the release or debug preset")
+  message(FATAL_ERROR "remmy is built with GCC 16; use the release or debug preset")
 endif()
 
 set(REMMY_LINT_FILES)

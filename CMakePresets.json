@@ -29,7 +29,7 @@
     {
       "name": "lint",
       "inherits": "debug",
-      "displayName": "Clang + clang-tidy over cutils (remmy needs GCC reflection)",
+      "displayName": "Clang + clang-tidy over cutils and src (remmy ships from GCC)",
       "binaryDir": "${sourceDir}/build/clang-lint",
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "clang++",
