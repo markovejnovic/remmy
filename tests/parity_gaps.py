@@ -74,74 +74,6 @@ def mark_known_gaps(items: list[pytest.Item]) -> None:
 
 
 GAPS: dict[str, Gap] = {
-    "getopt": Gap(
-        reason=(
-            "BSD getopt(3): only -dfiIPRrvWx, clustered and repeatable; parsing stops at the first operand, a "
-            "lone '-' or after '--' (no permutation, so 'rm a -v' removes a file named -v); the last of -f/-i "
-            "wins; an unknown option, including every --long one (reported as '-'), prints '<argv[0]>: illegal "
-            "option -- c' plus the two-line usage and exits 64; no operands prints the usage and exits 64, or "
-            "exits 0 silently under -f. remmy's -h/--help go away."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_cli.py::test_P_W_x[W_r_dir]",
-                "test_rm_parity_cli.py::test_directories[R_tree]",
-                "test_rm_parity_cli.py::test_directories[d_and_r]",
-                "test_rm_parity_cli.py::test_directories[file_d]",
-                "test_rm_parity_cli.py::test_interactive_i[i_f_separate]",
-                "test_rm_parity_cli.py::test_interactive_i[if_file]",
-                "test_rm_parity_cli.py::test_invocation_names[argv0_symlink_remmy_badopt]",
-                "test_rm_parity_cli.py::test_invocation_names[argv0_symlink_remmy_noargs]",
-                "test_rm_parity_cli.py::test_invocation_names[rm_symlink_named_rm_badopt_fullpath]",
-                "test_rm_parity_cli.py::test_legacy_command_mode[legacy_noargs_f]",
-                "test_rm_parity_cli.py::test_operands[dashfile_without_dashdash]",
-                "test_rm_parity_cli.py::test_override_prompts[ro_file_pty_f]",
-                "test_rm_parity_cli.py::test_prompt_once_I[I_3files]",
-                "test_rm_parity_cli.py::test_prompt_once_I[I_r_file_only]",
-                "test_rm_parity_cli.py::test_prompt_once_I[I_r_symlink_to_dir]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[badopt_argv0_empty]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[badopt_argv0_relpath]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[badopt_argv0_rm]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[cluster_trailing_dash]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[f_dashdash]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[noargs]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_dashdash]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_I]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_P]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_R]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_W]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_d]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_f]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_f_v]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_fr]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_i]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_r]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_rf]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_v]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[only_opt_x]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[opt_after_operand_v_file_named_dashv]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[rR]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown___]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown__force]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown__help]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown__recursive]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown__version]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown_fz]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown_h]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown_rz]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown_z]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown_z_no_operand]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[unknown_zr]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[usage_argv0_foo]",
-                "test_rm_parity_edges.py::test_misc[legacy_badopt]",
-                "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_remmy_usage]",
-                "test_rm_parity_fs.py::test_missing_and_directories[file_with_d]",
-                "test_rm_parity_fs.py::test_missing_and_directories[rd_tree]",
-                "test_rm_parity_fs.py::test_names[dash_name_without_dd]",
-                "test_rm_parity_fs.py::test_permissions[file_0444_pty_f]",
-            }
-        ),
-    ),
     "error-messages": Gap(
         reason=(
             "Every diagnostic is '<prog>: <path>: <strerror>' where <prog> is getprogname() (the executed file's "
@@ -548,13 +480,11 @@ GAPS: dict[str, Gap] = {
             {
                 "test_rm_parity_cli.py::test_invocation_names[badopt_unlink_mode]",
                 "test_rm_parity_cli.py::test_invocation_names[badopt_unlink_mode_two]",
-                "test_rm_parity_cli.py::test_invocation_names[unlink_bin_noargs]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_dashdash_only]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_dashdash_two]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_mode_dash_v_file]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_mode_dot]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_mode_slash]",
-                "test_rm_parity_cli.py::test_invocation_names[unlink_noargs]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_opt_f]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_opt_f_file]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_two]",
@@ -562,7 +492,6 @@ GAPS: dict[str, Gap] = {
                 "test_rm_parity_edges.py::test_unlink_mode[unlink_dashdash_prefixed_name]",
                 "test_rm_parity_edges.py::test_unlink_mode[unlink_dotdot]",
                 "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_flag]",
-                "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_noargs]",
                 "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_two]",
                 "test_rm_parity_fs.py::test_invocation_names[exe_rm_argv0_unlink_two_operands]",
             }
