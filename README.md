@@ -90,7 +90,8 @@ production-ready.**
 
 ## Install
 
-remmy is written in C++26 and needs GCC 16.
+remmy is written in C++26 and needs GCC 16. It runs on macOS and Linux; the
+numbers above are macOS-only.
 
 ```sh
 brew install gcc ninja cmake

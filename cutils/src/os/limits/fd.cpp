@@ -3,7 +3,9 @@
 #include "cutils/os/limits/fd.hpp"
 
 #include <sys/resource.h>
+#if defined(__APPLE__)
 #include <sys/sysctl.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -11,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <limits>
 #include <system_error>
 
 namespace cutils::os::limits::fd {
@@ -23,6 +26,11 @@ std::atomic_flag raise_attempted = ATOMIC_FLAG_INIT;
 
 [[nodiscard]] auto MaxFilesPerProc() noexcept
     -> std::expected<std::uint64_t, std::errc> {
+#if defined(__linux__)
+  // The kernel never lets the hard limit exceed fs.nr_open, so the rlimit
+  // already carries the per-process ceiling.
+  return std::numeric_limits<std::uint64_t>::max();
+#else
   int value = 0;
   std::size_t size = sizeof(value);
   if (::sysctlbyname("kern.maxfilesperproc", &value, &size, nullptr, 0) != 0) {
@@ -32,6 +40,7 @@ std::atomic_flag raise_attempted = ATOMIC_FLAG_INIT;
     return std::unexpected(std::errc::invalid_argument);
   }
   return static_cast<std::uint64_t>(value);
+#endif
 }
 
 [[nodiscard]] auto Rlimit() noexcept -> std::expected<::rlimit, std::errc> {

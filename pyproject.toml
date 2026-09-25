@@ -47,6 +47,7 @@ REMMY_FAULTS = { unset = true }
 REMMY_FAULT_LOG = { unset = true }
 REMMY_FAULT_DT_UNKNOWN = { unset = true }
 DYLD_INSERT_LIBRARIES = { unset = true }
+LD_PRELOAD = { unset = true }
 
 [tool.ruff]
 line-length = 120

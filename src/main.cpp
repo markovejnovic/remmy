@@ -20,7 +20,7 @@
 /// Each pushed directory gets consumed by a worker. Each worker then walks
 /// through
 /// the directory (without statting this time around, rather relying on
-/// getdirentries64) and:
+/// getdirentries64, or getdents64 on Linux) and:
 ///
 ///   - For each file, it `unlink`s it.
 ///   - For each directory, it opens the directory and pushes it back into the

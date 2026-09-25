@@ -184,6 +184,15 @@ def scratch(parent: Path) -> Iterator[Path]:
         force_remove(d)
 
 
+def chmod_nofollow(name: str, mode: int, *, dir_fd: int) -> None:
+    """``chmod`` ``name`` under ``dir_fd`` unless it is a symlink.
+
+    Linux cannot ``chmod`` a symlink itself, so symlinks are skipped everywhere.
+    """
+    if not stat.S_ISLNK(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode):
+        os.chmod(name, mode, dir_fd=dir_fd)
+
+
 def force_remove(root: Path) -> None:
     """Delete ``root`` regardless of permissions, file flags (``uchg``) or depth."""
     try:
@@ -202,7 +211,7 @@ def force_remove(root: Path) -> None:
         for d in dirnames:
             try:
                 _clear_flags(os.path.join(dirpath, d))
-                os.chmod(d, 0o700, dir_fd=dirfd, follow_symlinks=False)
+                chmod_nofollow(d, 0o700, dir_fd=dirfd)
             except OSError as e:
                 if e.errno != errno.ENOENT:
                     raise
