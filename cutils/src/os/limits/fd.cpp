@@ -16,14 +16,52 @@
 namespace cutils::os::limits::fd {
 namespace {
 
-// Leased descriptors in the low 32 bits, releases so far (the epoch) in the
-// high 32 bits: one atomic, so a release is one read-modify-write that both
-// frees a lease and advances the epoch, and a single load sees both at once.
-std::atomic<std::uint64_t> state{0};
-constexpr std::uint64_t kLiveMask = 0xFFFF'FFFF;
-constexpr int kEpochShift = 32;
-// Adding this drops the live count by one and carries one into the epoch.
-constexpr std::uint64_t kRelease = (std::uint64_t{1} << kEpochShift) - 1;
+// Leased descriptors, and how many have been released so far (the epoch).
+struct Leases {
+  std::uint32_t live;
+  std::uint32_t epoch;
+};
+
+// Leases packed into one atomic word, live in the low half and the epoch in
+// the high half: a release is one read-modify-write that both frees a lease
+// and advances the epoch, and a single load sees both at once.
+class AtomicLeases {
+ public:
+  [[nodiscard]] auto Load() const noexcept -> Leases {
+    return Unpack(bits_.load(std::memory_order_relaxed));
+  }
+
+  /// Returns the leases as they stand after this acquire.
+  auto Acquire() noexcept -> Leases {
+    return Unpack(bits_.fetch_add(kAcquire, std::memory_order_relaxed) +
+                  kAcquire);
+  }
+
+  void Release() noexcept {
+    bits_.fetch_add(kRelease, std::memory_order_relaxed);
+  }
+
+  void Abandon() noexcept {
+    bits_.fetch_sub(kAcquire, std::memory_order_relaxed);
+  }
+
+ private:
+  static constexpr int kEpochShift = 32;
+  static constexpr std::uint64_t kAcquire = 1;
+  // Adding this drops the live count by one and carries one into the epoch.
+  static constexpr std::uint64_t kRelease =
+      (std::uint64_t{1} << kEpochShift) - kAcquire;
+
+  [[nodiscard]] static constexpr auto Unpack(std::uint64_t bits) noexcept
+      -> Leases {
+    return {.live = static_cast<std::uint32_t>(bits),
+            .epoch = static_cast<std::uint32_t>(bits >> kEpochShift)};
+  }
+
+  std::atomic<std::uint64_t> bits_{0};
+};
+
+AtomicLeases leases;
 
 std::atomic<std::uint64_t> known_capacity{0};
 std::atomic<std::uint64_t> observed_ceiling{0};
@@ -121,36 +159,26 @@ auto SetMax() noexcept -> std::expected<std::uint64_t, std::errc> {
 }
 
 auto Pool::Live() noexcept -> std::uint64_t {
-  return state.load(std::memory_order_relaxed) & kLiveMask;
+  return leases.Load().live;
 }
 
 auto Pool::Capacity() noexcept -> std::uint64_t { return CapacityImpl(); }
 
-void Pool::NoteAcquired() noexcept {
-  const auto live =
-      (state.fetch_add(1, std::memory_order_relaxed) & kLiveMask) + 1;
-  RaiseIfNeeded(live);
-}
+void Pool::NoteAcquired() noexcept { RaiseIfNeeded(leases.Acquire().live); }
 
-void Pool::NoteReleased() noexcept {
-  state.fetch_add(kRelease, std::memory_order_relaxed);
-}
+void Pool::NoteReleased() noexcept { leases.Release(); }
 
-void Pool::NoteAbandoned() noexcept {
-  state.fetch_sub(1, std::memory_order_relaxed);
-}
+void Pool::NoteAbandoned() noexcept { leases.Abandon(); }
 
-auto Pool::Epoch() noexcept -> std::uint64_t {
-  return state.load(std::memory_order_relaxed) >> kEpochShift;
-}
+auto Pool::Epoch() noexcept -> std::uint64_t { return leases.Load().epoch; }
 
 auto Pool::MayHaveFreed(std::uint64_t epoch) noexcept -> bool {
   // Relaxed suffices: a descriptor that held the refused slot was counted
   // before its open, the kernel ordered that open before the refusal, and the
   // caller loads after the refusal. Coherence of the one atomic then shows the
   // lease, or a later state whose epoch has moved past it.
-  const auto now = state.load(std::memory_order_relaxed);
-  return (now & kLiveMask) != 0 || (now >> kEpochShift) != epoch;
+  const auto now = leases.Load();
+  return now.live != 0 || now.epoch != epoch;
 }
 
 void Pool::NoteExhaustion() noexcept {
