@@ -40,10 +40,6 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_G
   add_executable(remmy src/main.cpp src/dir_node.cpp)
   target_link_libraries(remmy PRIVATE cutils::cutils)
   target_compile_options(remmy PRIVATE -freflection)
-  # Startup dominates small trees. Homebrew's libstdc++ is not in the dyld
-  # shared cache (~2 ms to load), and the weak definitions it exports once
-  # linked statically make dyld coalesce weak symbols across every image
-  # (~4 ms). Link it in and export only main.
   target_link_options(remmy PRIVATE -static-libstdc++ -static-libgcc
     -Wl,-exported_symbol,_main)
   cutils_harden(remmy)
