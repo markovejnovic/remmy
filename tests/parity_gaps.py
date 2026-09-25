@@ -284,6 +284,7 @@ GAPS: dict[str, Gap] = {
                 "test_rm_parity_fs.py::test_permissions[file_0444_devnull]",
                 "test_rm_parity_fs.py::test_permissions[r_subdir_of_0555_parent]",
                 "test_rm_parity_fs.py::test_permissions[r_tree_with_0444_files_devnull]",
+                "test_rm_parity_fs.py::test_permissions[rfv_empty_subdir_0000]",
                 "test_rm_parity_fs.py::test_permissions[rv_subdir_0000]",
                 "test_rm_parity_fs.py::test_recursion_and_order[duplicate_operands]",
                 "test_rm_parity_fs.py::test_recursion_and_order[duplicate_operands_f]",

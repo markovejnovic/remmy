@@ -199,3 +199,45 @@ def test_unreadable_subdirectory_opened_late_under_fd_pressure(
         assert fstree.listing(workdir) == {"t"} | {f"t/{name}" for name in locked} | (
             {f"t/L{k}/x" for k in range(n)} if contents == "full" else set()
         )
+
+
+def test_force_removes_unreadable_empty_directories(run: Runner, workdir: Path, threads: int) -> None:
+    """Like rm -rf, which still rmdirs a directory it cannot read and says nothing when that works."""
+    fstree.build(workdir, {"t": {"sealed": {}, "deep": {"sealed": {}}, "x": ""}, "op": {}})
+    for p in ("t/sealed", "t/deep/sealed", "op"):
+        os.chmod(workdir / p, 0o000)
+
+    res = run("-rf", "t", "op", threads=threads)
+
+    with check:
+        assert (res.returncode, res.stderr) == (0, ""), res
+    with check:
+        assert fstree.listing(workdir) == set()
+
+
+@pytest.mark.parametrize("fd_limit", [None, 16])
+def test_force_keeps_unreadable_full_directories(
+    run: Runner, workdir: Path, threads: int, fd_limit: int | None
+) -> None:
+    """-f removes the unreadable empty ones, also opened late under fd pressure; full ones stay, reported once."""
+    n = 12
+    spec: fstree.Spec = {f"d{i}": {"e": {"f": ""}} for i in range(300)}
+    spec |= {f"E{k}": {} for k in range(n)} | {f"F{k}": {"x": ""} for k in range(n)}
+    fstree.build(workdir, {"t": spec})
+    for k in range(n):
+        os.chmod(workdir / f"t/E{k}", 0o000)
+        os.chmod(workdir / f"t/F{k}", 0o000)
+
+    res = run("-rf", "t", threads=threads, fd_limit=fd_limit)
+
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert sorted(res.errors) == sorted(
+            [f"remmy: t/F{k}: {os.strerror(errno.EACCES)}" for k in range(n)]
+            + [f"remmy: t: {os.strerror(errno.ENOTEMPTY)}"]
+        ), res
+    for k in range(n):
+        os.chmod(workdir / f"t/F{k}", 0o700)
+    with check:
+        assert fstree.listing(workdir) == {"t"} | {f"t/F{k}" for k in range(n)} | {f"t/F{k}/x" for k in range(n)}

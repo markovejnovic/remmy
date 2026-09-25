@@ -153,6 +153,12 @@ auto ReportError(std::string_view dir, std::string_view name,
   WriteStderr({ProgramName(), ": ", dir, "/", name, ": ", text.View(), "\n"});
 }
 
+/// @brief Whether a directory is gone after rmdir(2) (or unlinkat(2) with
+///        AT_REMOVEDIR) returned `status`: removed now or already missing.
+auto DirGone(int status) noexcept -> bool {
+  return status == 0 || errno == ENOENT;
+}
+
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -175,6 +181,10 @@ class FileUnlinkWorker {
   /// @brief The total number of failures that this worker encountered.
   std::size_t failures_ = 0;
 
+  /// @brief -f: like rm, try to rmdir a directory that cannot be opened (an
+  ///        unreadable one, fts's FTS_DNR) and say nothing when that works.
+  bool force_ = false;
+
   /// @brief The main entry-point the scheduler invokes for this task.
   ///
   /// This function is called by the scheduler periodically as new tasks are
@@ -189,10 +199,14 @@ class FileUnlinkWorker {
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
         // Like the inline openat failure in Scan: report the directory and
-        // leave it be. It was never scanned, so nothing references it and it
-        // must not be rmdir'd; only its parent's count of it is dropped.
-        failures_++;
-        ReportError(task->PathInto(path_buffer_), static_cast<int>(err.code));
+        // leave it be (-f first tries rmdir, as rm does). It was never
+        // scanned, so nothing references it; only its parent's count of it
+        // is dropped.
+        const char* path = task->PathInto(path_buffer_);
+        if (!force_ || !DirGone(cutils::os::rmdir(path))) {
+          failures_++;
+          ReportError(path, static_cast<int>(err.code));
+        }
         DirNode* parent = task->parent_;
         delete task;
         if (parent != nullptr) {
@@ -259,9 +273,12 @@ class FileUnlinkWorker {
         if (opened) {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
-          failures_++;
-          ReportError(task->PathInto(path_buffer_), entry.name(),
-                      static_cast<int>(opened.error().code));
+          if (!force_ || !DirGone(cutils::os::unlinkat(task->fd_, entry.c_str(),
+                                                       AT_REMOVEDIR))) {
+            failures_++;
+            ReportError(task->PathInto(path_buffer_), entry.name(),
+                        static_cast<int>(opened.error().code));
+          }
           continue;
         }
       }
@@ -425,7 +442,9 @@ auto main(int argc, char** argv) -> int {
   }
 
   const std::uint16_t threads = ThreadCount();
-  Scheduler scheduler(threads);
+  FileUnlinkWorker prototype;
+  prototype.force_ = cli->options.force;
+  Scheduler scheduler(threads, prototype);
 
   std::size_t failures = 0;
   for (const char* path : cli->operands) {
@@ -461,8 +480,11 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      ReportError(path, static_cast<int>(dirfd.error().code));
-      ++failures;
+      // As in the walk: under -f, rm removes an unreadable empty directory.
+      if (!cli->options.force || !DirGone(cutils::os::rmdir(path))) {
+        ReportError(path, static_cast<int>(dirfd.error().code));
+        ++failures;
+      }
       continue;
     }
 
