@@ -37,7 +37,7 @@ markers = [
   "benchmark: opt-in comparison benchmark (pass --bench=demo or --bench=full)",
   "stress: race-prone; hammer with `-m stress --count N`",
   "filesystems: runs on scratch disk images of other filesystem types (macOS, hdiutil)",
-  "parity: exact output, exit code and tree parity with BSD /bin/rm (macOS); expected to fail until remmy matches",
+  "parity: exact output, exit code and tree parity with BSD /bin/rm (macOS); known gaps are strict xfails listed in tests/parity_gaps.py",
 ]
 
 # Variables that change remmy's behaviour must come from the tests, never from

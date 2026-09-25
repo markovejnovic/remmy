@@ -14,7 +14,8 @@ repeated byte for byte, and both runs here build the same names at the same
 path. So everything is compared exactly. No case needs an order-insensitive
 comparison.
 
-remmy is not expected to pass these yet: they spell out what full parity means.
+The cases remmy does not pass yet are listed in ``parity_gaps`` and run as strict
+xfails.
 """
 
 from __future__ import annotations
