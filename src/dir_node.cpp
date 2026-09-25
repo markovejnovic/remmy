@@ -33,7 +33,7 @@ auto OpenAt(const cutils::os::Fd& dir, const char* name, int flags) noexcept
 /// Returns why it could not be opened on failure.
 auto OpenLong(std::string_view path, int flags) noexcept
     -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
-  std::array<char, PATH_MAX> piece{};
+  std::array<char, PATH_MAX> piece;
   cutils::os::Fd dir;
   while (path.size() >= PATH_MAX) {
     const std::size_t cut = path.rfind('/', PATH_MAX - 1);
