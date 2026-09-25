@@ -90,7 +90,7 @@ struct DirNode {
 
   /// @brief Walk the parent chain to build the full absolute path into the
   ///        given output buffer.
-  auto PathInto(std::string& out) const -> const char*;
+  auto PathInto(std::string& out) const noexcept -> const char*;
 
   /// @brief Get a read-only range over this node and its ancestors.
   ///

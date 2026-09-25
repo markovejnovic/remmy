@@ -69,7 +69,7 @@ auto DirNode::ParentsMut() noexcept -> MutableParentChain {
   return MutableParentChain{this};
 }
 
-auto DirNode::PathInto(std::string& out) const -> const char* {
+auto DirNode::PathInto(std::string& out) const noexcept -> const char* {
   // I want to avoid resizing here too much, so first we count the total
   // number of bytes we'd need in the directory tree.
   const std::size_t total = std::ranges::fold_left(
