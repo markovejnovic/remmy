@@ -27,9 +27,12 @@ struct HelpFirst {
   [[= cpplap::Short("-r")]] bool recursive = false;
 };
 
-using File = std::unique_ptr<std::FILE, decltype(&std::fclose)>;
+struct CloseFile {
+  void operator()(std::FILE* file) const noexcept { (void)std::fclose(file); }
+};
+using File = std::unique_ptr<std::FILE, CloseFile>;
 auto TempFile() -> File {
-  File file{std::tmpfile(), &std::fclose};
+  File file{std::tmpfile()};
   REQUIRE(file != nullptr);
   return file;
 }

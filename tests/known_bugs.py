@@ -8,24 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-SWALLOWED_UNLINK_ERROR = pytest.mark.xfail(
-    strict=True,
-    reason="unlinkat failures inside a tree are ignored (TODO in FileUnlinkWorker::Scan); "
-    "only the parents' ENOTEMPTY is reported",
-)
-
-UNCLASSIFIED_ENTRY_TREATED_AS_FILE = pytest.mark.xfail(
-    strict=True,
-    reason="when d_type is unknown and fstatat fails, the entry is treated as a file; "
-    "its unlink fails silently and the stat error is never reported",
-)
-
-DELETES_DOT_CONTENTS = pytest.mark.xfail(
-    strict=True,
-    reason="remmy walks into `.` and `..` operands and deletes their contents before failing on the"
-    " directory itself; POSIX requires refusing them with a diagnostic, as BSD and GNU rm do",
-)
-
 PATH_MAX_EXCEEDED = pytest.mark.xfail(
     strict=True,
     reason="directories are removed by full path (rmdir), which fails with "

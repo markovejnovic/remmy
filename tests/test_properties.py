@@ -15,9 +15,9 @@ import pytest
 import strategies
 from fstree import Symlink
 from harness import run_remmy
-from hypothesis import event, example, given, target
+from hypothesis import assume, event, example, given, target
 from hypothesis import strategies as st
-from oracle import RM, compare_with_rm
+from oracle import RM, RM_REMOVES_UNREADABLE_EMPTY_DIRS, compare_with_rm
 
 
 @pytest.fixture(scope="module")
@@ -90,6 +90,13 @@ MODES = st.sampled_from([0o000, 0o111, 0o333, 0o444, 0o555])
 needs_rm = pytest.mark.skipif(not os.access(RM, os.X_OK), reason=f"{RM} not available")
 
 
+def _subtree(tree: fstree.Spec, path: str) -> fstree.Spec:
+    """The spec of directory ``path`` ("t" or "t/..."), with ``tree`` as "t"."""
+    for part in path.split("/")[1:]:
+        tree = tree[part]
+    return tree
+
+
 @pytest.mark.differential
 @needs_rm
 @given(tree=strategies.trees, data=st.data())
@@ -105,6 +112,8 @@ def test_partial_failures_match_rm(
     for mode in set(locks.values()):
         event(f"lock mode used: {mode:03o}")
     target(float(len(locks)), label="locked directories")
+    if RM_REMOVES_UNREADABLE_EMPTY_DIRS:
+        assume(not any(mode & 0o400 == 0 and not _subtree(tree, path) for path, mode in locks.items()))
 
     def recipe(root: Path) -> None:
         fstree.build(root / "t", tree)

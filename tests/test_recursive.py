@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 
 import fstree
-import known_bugs
 import pytest
 from fstree import Hardlink, Special, Symlink
 from harness import Runner
@@ -217,14 +216,14 @@ def test_operand_in_deep_relative_cwd(run: Runner, workdir: Path, threads: int) 
         assert fstree.listing(workdir) == {"a", "a/b", "a/b/c"}
 
 
-@known_bugs.DELETES_DOT_CONTENTS
-@pytest.mark.parametrize("operand", [".", "..", "sub/.", "sub/.."])
-def test_dot_and_dotdot_operands_are_refused(run: Runner, workdir: Path, operand: str) -> None:
+@pytest.mark.parametrize("recursive", [True, False], ids=["r", "no-r"])
+@pytest.mark.parametrize("operand", [".", "..", "sub/.", "sub/..", "./", "sub/..//"])
+def test_dot_and_dotdot_operands_are_refused(run: Runner, workdir: Path, operand: str, recursive: bool) -> None:
     """POSIX: an operand whose last component is `.` or `..` gets a diagnostic and nothing else."""
     fstree.build(workdir, {"keep": "x", "a": {"f": "x", "b": {"g": "x", "sub": {"h": "x"}}}})
     before = fstree.snapshot_dir(workdir)
 
-    res = run("-r", operand, cwd=workdir / "a" / "b")
+    res = run(*(["-r"] if recursive else []), operand, cwd=workdir / "a" / "b")
 
     with check:
         assert res.returncode == 1, res
@@ -232,6 +231,17 @@ def test_dot_and_dotdot_operands_are_refused(run: Runner, workdir: Path, operand
         assert res.stderr, res
     with check:
         assert fstree.snapshot_dir(workdir) == before
+
+
+def test_other_operands_are_removed_after_a_refused_dot(run: Runner, workdir: Path) -> None:
+    fstree.build(workdir, {"keep": "x", "gone": {"f": "x"}, "also": "x"})
+
+    res = run("-r", ".", "gone", "also", cwd=workdir)
+
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert fstree.listing(workdir) == {"keep"}
 
 
 def test_parent_relative_operand(run: Runner, workdir: Path) -> None:

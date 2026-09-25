@@ -20,7 +20,7 @@
 /// Each pushed directory gets consumed by a worker. Each worker then walks
 /// through
 /// the directory (without statting this time around, rather relying on
-/// getdirentries64) and:
+/// getdirentries64, or getdents64 on Linux) and:
 ///
 ///   - For each file, it `unlink`s it.
 ///   - For each directory, it opens the directory and pushes it back into the
@@ -162,14 +162,26 @@ class FileUnlinkWorker {
         // Some filesystems don't populate d_type; fall back to fstatat.
         struct stat st;
         if (cutils::os::fstatat(task->fd_, entry.c_str(), &st,
-                                AT_SYMLINK_NOFOLLOW) == 0) {
-          is_dir = S_ISDIR(st.st_mode);
+                                AT_SYMLINK_NOFOLLOW) != 0) {
+          if (errno != ENOENT) {
+            failures_++;
+            std::println(stderr, "cannot stat '{}/{}': {}",
+                         task->PathInto(path_buffer_), entry.name(),
+                         std::strerror(errno));
+          }
+          continue;
         }
+        is_dir = S_ISDIR(st.st_mode);
       }
 
       if (!is_dir) {
-        cutils::os::unlinkat(task->fd_, entry.c_str(),
-                             0);  // TODO(markovejnovic): error handling.
+        if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
+            errno != ENOENT) {
+          failures_++;
+          std::println(stderr, "cannot remove '{}/{}': {}",
+                       task->PathInto(path_buffer_), entry.name(),
+                       std::strerror(errno));
+        }
         continue;
       }
 
@@ -239,6 +251,19 @@ class FileUnlinkWorker {
 using Scheduler =
     cutils::TaskScheduler<FileUnlinkWorker, FileUnlinkWorker::kRanks>;
 
+/// @brief Whether the operand's last component is `.` or `..`.
+constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
+  while (path.size() > 1 && path.back() == '/') {
+    path.remove_suffix(1);
+  }
+
+  const std::size_t slash = path.rfind('/');
+  const std::string_view last =
+      slash == std::string_view::npos ? path : path.substr(slash + 1);
+
+  return last == "." || last == "..";
+}
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -260,6 +285,13 @@ auto main(int argc, char** argv) -> int {
 
   std::size_t failures = 0;
   for (const char* path : cli_opts->positional) {
+    if (IsDotOrDotDotOperand(path)) {
+      std::println(stderr,
+                   "cannot remove '{}': '.' and '..' may not be removed", path);
+      ++failures;
+      continue;
+    }
+
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
       std::println(stderr, "cannot remove '{}': {}", path,

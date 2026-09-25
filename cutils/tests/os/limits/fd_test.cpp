@@ -2,7 +2,9 @@
 
 #include <fcntl.h>
 #include <sys/resource.h>
+#if defined(__APPLE__)
 #include <sys/sysctl.h>
+#endif
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -28,12 +30,17 @@ auto RawLimits() -> ::rlimit {
 }
 
 auto Cap() -> std::uint64_t {
+#if defined(__linux__)
+  // Linux bounds the hard limit by fs.nr_open, so the hard limit is the cap.
+  return static_cast<std::uint64_t>(RawLimits().rlim_max);
+#else
   int value = 0;
   std::size_t size = sizeof(value);
   REQUIRE(::sysctlbyname("kern.maxfilesperproc", &value, &size, nullptr, 0) ==
           0);
   REQUIRE(value > 0);
   return static_cast<std::uint64_t>(value);
+#endif
 }
 
 void RequireApplied(std::uint64_t expected) {

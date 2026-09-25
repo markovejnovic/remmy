@@ -13,6 +13,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <cutils/os/fd.hpp>
 #include <expected>
 #include <iterator>
@@ -23,6 +24,7 @@
 #include <system_error>
 #include <vector>
 
+#if defined(__APPLE__)
 // These are the libsystem_kernel symbols themselves, so the reserved spelling
 // is the point rather than an accident.
 // NOLINTBEGIN(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
@@ -30,8 +32,19 @@ extern "C" int __unlinkat(int fd, const char* name, int opts);
 extern "C" auto __getdirentries64(int fd, void* buffer, std::size_t size,
                                   off_t* offset) -> ssize_t;
 // NOLINTEND(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+#elif !defined(__linux__)
+#error "cutils/os/os.hpp: requires Darwin or Linux"
+#endif
 
 namespace cutils::os {
+
+/// @brief The record layout the raw directory-read syscall fills in.
+#if defined(__APPLE__)
+using RawDirent = ::dirent;
+#else
+// getdents64 always writes the 64-bit layout, whatever ::dirent is here.
+using RawDirent = ::dirent64;
+#endif
 
 /// @brief Returns an owning Fd, or why it could not be opened.
 [[nodiscard]] inline auto open(const char* path, int flags) noexcept
@@ -68,7 +81,7 @@ inline auto unlinkat(const Fd& dir, const char* name, int opts) noexcept
   // directly and just call the syscall itself.
   return __unlinkat(dir.get(), name, opts);
 #else
-#error "cutils/os/os.hpp: unlinkat shim requires Darwin"
+  return ::unlinkat(dir.get(), name, opts);
 #endif
 }
 
@@ -80,16 +93,24 @@ inline auto getdirentries64(const Fd& dir, void* buffer, std::size_t size,
   // readdir() itself calls, so we read straight into a buffer we already own.
   return __getdirentries64(dir.get(), buffer, size, offset);
 #else
-#error "cutils/os/os.hpp: getdirentries64 shim requires Darwin"
+  // getdents64 tracks the position in the open file description itself.
+  (void)offset;
+  return ::getdents64(dir.get(), buffer, size);
 #endif
 }
 
 class DirEntry {
  public:
-  explicit DirEntry(const ::dirent* raw) noexcept : raw_(raw) {}
+  explicit DirEntry(const RawDirent* raw) noexcept : raw_(raw) {}
 
   [[nodiscard]] auto name() const noexcept -> std::string_view {
+#if defined(__APPLE__)
     return {static_cast<const char*>(raw_->d_name), raw_->d_namlen};
+#else
+    // Linux records carry no name length; the name is NUL-padded instead.
+    const auto* text = static_cast<const char*>(raw_->d_name);
+    return {text, std::strlen(text)};
+#endif
   }
 
   [[nodiscard]] auto type() const noexcept -> std::uint8_t {
@@ -115,10 +136,10 @@ class DirEntry {
     return static_cast<const char*>(raw_->d_name);
   }
 
-  [[nodiscard]] auto raw() const noexcept -> const ::dirent& { return *raw_; }
+  [[nodiscard]] auto raw() const noexcept -> const RawDirent& { return *raw_; }
 
  private:
-  const ::dirent* raw_;
+  const RawDirent* raw_;
 };
 
 inline constexpr std::size_t kDefaultDirBufferBytes = 64UZ * 1024UZ;
@@ -126,11 +147,11 @@ inline constexpr std::size_t kDefaultDirBufferBytes = 64UZ * 1024UZ;
 // One directory's entries, read in blocks through a borrowed buffer.
 class DirEntries : public std::ranges::view_interface<DirEntries> {
  public:
-  // Storage aligned for ::dirent so the reinterpret_cast in CurrentEntry is
-  // valid; alignment tracks ::dirent by construction rather than by
+  // Storage aligned for RawDirent so the reinterpret_cast in CurrentEntry is
+  // valid; alignment tracks RawDirent by construction rather than by
   // coincidence.
-  struct alignas(::dirent) Word {
-    std::byte storage[alignof(::dirent)];
+  struct alignas(RawDirent) Word {
+    std::byte storage[alignof(RawDirent)];
   };
   using value_type = std::expected<DirEntry, std::errc>;
 
@@ -184,7 +205,7 @@ class DirEntries : public std::ranges::view_interface<DirEntries> {
     // Entries are packed and d_reclen-strided; sizeof(dirent) is the maximum,
     // not the stride.
     const auto* bytes = reinterpret_cast<const char*>(buffer_.data());
-    return DirEntry{reinterpret_cast<const ::dirent*>(bytes + offset_)};
+    return DirEntry{reinterpret_cast<const RawDirent*>(bytes + offset_)};
   }
 
   [[nodiscard]] auto Current() const noexcept -> value_type {

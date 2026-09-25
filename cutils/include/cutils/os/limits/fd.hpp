@@ -4,8 +4,8 @@
 #ifndef CUTILS_OS_LIMITS_FD_HPP
 #define CUTILS_OS_LIMITS_FD_HPP
 
-#ifndef __APPLE__
-#error "cutils/os/limits/fd.hpp: fd limit clamping requires Darwin"
+#if !defined(__APPLE__) && !defined(__linux__)
+#error "cutils/os/limits/fd.hpp: fd limit clamping requires Darwin or Linux"
 #endif
 
 #include <cstdint>
