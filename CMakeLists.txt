@@ -43,8 +43,9 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_G
   add_executable(remmy src/main.cpp src/dir_node.cpp)
   target_link_libraries(remmy PRIVATE cutils::cutils)
   target_compile_options(remmy PRIVATE -freflection)
+  # ld64 flag; ELF executables export nothing without -rdynamic anyway.
   target_link_options(remmy PRIVATE -static-libstdc++ -static-libgcc
-    -Wl,-exported_symbol,_main)
+    $<$<PLATFORM_ID:Darwin>:-Wl,-exported_symbol,_main>)
   cutils_harden(remmy)
   # Clang tools cannot parse the reflecting entry point.
   set_property(TARGET remmy PROPERTY CXX_CLANG_TIDY "")

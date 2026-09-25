@@ -90,7 +90,7 @@ struct DirNode {
 
   /// @brief Walk the parent chain to build the full absolute path into the
   ///        given output buffer.
-  auto PathInto(std::string& out) const -> const char*;
+  auto PathInto(std::string& out) const noexcept -> const char*;
 
   /// @brief Get a read-only range over this node and its ancestors.
   ///
@@ -110,6 +110,11 @@ struct DirNode {
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
   auto Open(std::string& scratch) noexcept
       -> std::expected<void, cutils::os::OpenError>;
+
+  /// @brief Remove this (by now empty) directory.
+  ///
+  /// @param scratch A scratch buffer; it holds this node's path afterwards.
+  auto RemoveEmpty(std::string& scratch) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the
