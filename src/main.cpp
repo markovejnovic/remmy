@@ -64,6 +64,8 @@
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
 #include <initializer_list>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -113,6 +115,79 @@ auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
          errno == EINTR) {
   }
 }
+
+/// @brief -v's output: every removed path on a line of its own on stdout.
+///
+/// Buffered like rm's stdio stdout (flushed when full and at exit, and after
+/// every line when stdout is a terminal), and shared by the workers under a
+/// lock. A path is added after its removal succeeded, and a directory is only
+/// removed once its contents are, so each line comes after the lines of what
+/// the removal depended on: the lines of one directory keep its readdir order
+/// and a directory follows its contents. Only the relative order of sibling
+/// subtrees and of different operands, which remmy removes in parallel,
+/// differs from rm's.
+///
+/// Whatever is left is written out on destruction. Write failures are ignored,
+/// as rm ignores them. Without -v there is no log: the workers hold a null
+/// pointer, and the removal path pays one branch for it.
+class RemovedLog {
+ public:
+  RemovedLog() noexcept : line_buffered_(::isatty(STDOUT_FILENO) != 0) {
+    buffer_.reserve(kCapacity);
+  }
+
+  RemovedLog(const RemovedLog&) = delete;
+  auto operator=(const RemovedLog&) -> RemovedLog& = delete;
+  RemovedLog(RemovedLog&&) = delete;
+  auto operator=(RemovedLog&&) -> RemovedLog& = delete;
+
+  ~RemovedLog() { Flush(); }
+
+  /// @brief Adds the line made of `pieces` and a newline, leaving errno as it
+  ///        was, so a caller may still report the error after it.
+  auto Add(std::initializer_list<std::string_view> pieces) noexcept -> void {
+    const int saved_errno = errno;
+    {
+      const std::lock_guard lock(mutex_);
+      for (const std::string_view piece : pieces) {
+        buffer_.append(piece);
+      }
+      buffer_.push_back('\n');
+      if (line_buffered_ || buffer_.size() >= kCapacity) {
+        FlushLocked();
+      }
+    }
+    errno = saved_errno;
+  }
+
+  /// @brief Writes out what is buffered.
+  auto Flush() noexcept -> void {
+    const std::lock_guard lock(mutex_);
+    FlushLocked();
+  }
+
+ private:
+  static constexpr std::size_t kCapacity = std::size_t{64} * 1024;
+
+  auto FlushLocked() noexcept -> void {
+    std::string_view rest = buffer_;
+    while (!rest.empty()) {
+      const ssize_t written = ::write(STDOUT_FILENO, rest.data(), rest.size());
+      if (written < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        break;
+      }
+      rest.remove_prefix(static_cast<std::size_t>(written));
+    }
+    buffer_.clear();
+  }
+
+  std::mutex mutex_;
+  std::string buffer_;
+  bool line_buffered_;
+};
 
 /// @brief The name rm's diagnostics start with: getprogname(3), which is the
 ///        basename of the executed file (a symlink's own name), not argv[0].
@@ -210,6 +285,13 @@ class FileUnlinkWorker {
   ///        unreadable one, fts's FTS_DNR) and say nothing when that works.
   bool force_ = false;
 
+  /// @brief -v: where removed paths go; null without -v.
+  RemovedLog* removed_ = nullptr;
+
+  /// @brief Thread-local buffer holding the path of the directory being
+  ///        scanned, for -v's lines about its entries.
+  std::string scan_path_;
+
   /// @brief The main entry-point the scheduler invokes for this task.
   ///
   /// This function is called by the scheduler periodically as new tasks are
@@ -228,7 +310,7 @@ class FileUnlinkWorker {
         // scanned, so nothing references it; only its parent's count of it
         // is dropped.
         const char* path = task->PathInto(path_buffer_);
-        if (!force_ || !DirGone(cutils::os::rmdir(path))) {
+        if (!force_ || !DirGone(LogRemoval(cutils::os::rmdir(path), path))) {
           failures_++;
           ReportError(path, static_cast<int>(err.code));
         }
@@ -251,6 +333,9 @@ class FileUnlinkWorker {
  private:
   /// @brief Scan through the given directory.
   void Scan(DirNode* task, auto& ctx) noexcept {
+    // Entries are logged as "<dir>/<name>", fts's path for them.
+    const std::string_view dir_path =
+        removed_ != nullptr ? task->PathInto(scan_path_) : "";
     for (const auto& read : dirs_.Read(task->fd_)) {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
@@ -281,8 +366,11 @@ class FileUnlinkWorker {
       }
 
       if (!is_dir) {
-        if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
-            errno != ENOENT) {
+        if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) == 0) {
+          if (removed_ != nullptr) {
+            removed_->Add({dir_path, "/", entry.name()});
+          }
+        } else if (errno != ENOENT) {
           failures_++;
           ReportError(task->PathInto(path_buffer_), entry.name(), errno);
         }
@@ -298,8 +386,10 @@ class FileUnlinkWorker {
         if (opened) {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
-          if (!force_ || !DirGone(cutils::os::unlinkat(task->fd_, entry.c_str(),
-                                                       AT_REMOVEDIR))) {
+          if (!force_ ||
+              !DirGone(LogRemoval(
+                  cutils::os::unlinkat(task->fd_, entry.c_str(), AT_REMOVEDIR),
+                  dir_path, entry.name()))) {
             failures_++;
             ReportError(task->PathInto(path_buffer_), entry.name(),
                         static_cast<int>(opened.error().code));
@@ -325,6 +415,29 @@ class FileUnlinkWorker {
     }
   }
 
+  /// @brief Passes a removal's `status` through, logging the removed path
+  ///        (the concatenated `pieces`) under -v when it succeeded.
+  ///
+  /// Only for removals that are rare or cost a path anyway: the pieces are
+  /// built whether or not -v is on.
+  auto LogRemoval(int status,
+                  std::initializer_list<std::string_view> pieces) noexcept
+      -> int {
+    if (status == 0 && removed_ != nullptr) {
+      removed_->Add(pieces);
+    }
+    return status;
+  }
+
+  auto LogRemoval(int status, std::string_view path) noexcept -> int {
+    return LogRemoval(status, {path});
+  }
+
+  auto LogRemoval(int status, std::string_view dir,
+                  std::string_view name) noexcept -> int {
+    return LogRemoval(status, {dir, "/", name});
+  }
+
   /// @brief Cleanup a DirNode if we need to.
   ///
   /// This tries to delete a DirNode if there are no more DirNode's referencing
@@ -343,7 +456,7 @@ class FileUnlinkWorker {
       std::atomic_thread_fence(std::memory_order_acquire);
 
       const char* path = current->PathInto(path_buffer_);
-      if (cutils::os::rmdir(path) != 0 && errno != ENOENT) {
+      if (LogRemoval(cutils::os::rmdir(path), path) != 0 && errno != ENOENT) {
         failures_++;
         ReportError(path, errno);
       }
@@ -554,9 +667,24 @@ auto main(int argc, char** argv) -> int {
   }
 
   const bool force = cli->options.force;
+  // Declared before the scheduler, so it outlives the workers holding it and
+  // flushes once they are done.
+  std::optional<RemovedLog> removed;
+  if (cli->options.verbose) {
+    removed.emplace();
+  }
+  // -v: operands are logged exactly as typed, and walks start from them.
+  const auto log_removed = [&removed](int status, const char* path) {
+    if (status == 0 && removed) {
+      removed->Add({path});
+    }
+    return status;
+  };
+
   const std::uint16_t threads = ThreadCount();
   FileUnlinkWorker prototype;
   prototype.force_ = force;
+  prototype.removed_ = removed ? &*removed : nullptr;
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = guarded.refused ? 1 : 0;
@@ -571,7 +699,7 @@ auto main(int argc, char** argv) -> int {
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
-      if (cutils::os::unlink(path) != 0) {
+      if (log_removed(cutils::os::unlink(path), path) != 0) {
         if (const int error = errno; Reportable(force, error)) {
           ReportError(path, error);
           ++failures;
@@ -584,7 +712,7 @@ auto main(int argc, char** argv) -> int {
       if (cli->options.dir) {
         // -d: rmdir(2) the operand as given, so "l/" removes the link's
         // target and "//" fails with EISDIR, and report errno like unlink.
-        if (cutils::os::rmdir(path) != 0) {
+        if (log_removed(cutils::os::rmdir(path), path) != 0) {
           if (const int error = errno; Reportable(force, error)) {
             ReportError(path, error);
             ++failures;
@@ -602,7 +730,7 @@ auto main(int argc, char** argv) -> int {
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
       // As in the walk: under -f, rm removes an unreadable empty directory.
-      if (!force || !DirGone(cutils::os::rmdir(path))) {
+      if (!force || !DirGone(log_removed(cutils::os::rmdir(path), path))) {
         ReportError(path, static_cast<int>(dirfd.error().code));
         ++failures;
       }
