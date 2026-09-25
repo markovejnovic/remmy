@@ -118,22 +118,37 @@ auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
 
 /// @brief -v's output: every removed path on a line of its own on stdout.
 ///
-/// Buffered like rm's stdio stdout (flushed when full and at exit, and after
-/// every line when stdout is a terminal), and shared by the workers under a
-/// lock. A path is added after its removal succeeded, and a directory is only
-/// removed once its contents are, so each line comes after the lines of what
-/// the removal depended on: the lines of one directory keep its readdir order
-/// and a directory follows its contents. Only the relative order of sibling
-/// subtrees and of different operands, which remmy removes in parallel,
-/// differs from rm's.
+/// Buffered byte for byte like rm's stdio stdout, so that its lines land at
+/// the same offsets among rm's (unbuffered) diagnostics when both go to one
+/// file or pipe: the buffer is stdout's st_blksize (BUFSIZ when fstat(2) gives
+/// none), line buffered on a terminal. Like __sfvwrite, a piece that no longer
+/// fits tops the buffer up and writes it out whole, even mid-line, a piece at
+/// least a buffer long goes out directly a buffer at a time, and a full buffer
+/// waits for the next byte (or exit) to be written.
+///
+/// The workers share it under a lock. A path is added after its removal
+/// succeeded, and a directory is only removed once its contents are, so a
+/// directory's line follows those of its contents. The order among entries of
+/// one directory, sibling subtrees and operands, which remmy removes in
+/// parallel, can differ from rm's.
 ///
 /// Whatever is left is written out on destruction. Write failures are ignored,
 /// as rm ignores them. Without -v there is no log: the workers hold a null
 /// pointer, and the removal path pays one branch for it.
 class RemovedLog {
  public:
-  RemovedLog() noexcept : line_buffered_(::isatty(STDOUT_FILENO) != 0) {
-    buffer_.reserve(kCapacity);
+  RemovedLog() noexcept {
+    const int saved_errno = errno;
+    struct stat out_stat;
+    if (::fstat(STDOUT_FILENO, &out_stat) == 0) {
+      if (out_stat.st_blksize > 0) {
+        capacity_ = static_cast<std::size_t>(out_stat.st_blksize);
+      }
+      line_buffered_ =
+          S_ISCHR(out_stat.st_mode) && ::isatty(STDOUT_FILENO) != 0;
+    }
+    buffer_.reserve(capacity_);
+    errno = saved_errno;
   }
 
   RemovedLog(const RemovedLog&) = delete;
@@ -150,12 +165,9 @@ class RemovedLog {
     {
       const std::lock_guard lock(mutex_);
       for (const std::string_view piece : pieces) {
-        buffer_.append(piece);
+        PutLocked(piece);
       }
-      buffer_.push_back('\n');
-      if (line_buffered_ || buffer_.size() >= kCapacity) {
-        FlushLocked();
-      }
+      PutLocked("\n");
     }
     errno = saved_errno;
   }
@@ -167,10 +179,56 @@ class RemovedLog {
   }
 
  private:
-  static constexpr std::size_t kCapacity = std::size_t{64} * 1024;
+  /// @brief BUFSIZ on macOS, stdio's size when st_blksize is not positive.
+  static constexpr std::size_t kFallbackCapacity = 1024;
+
+  /// @brief __sfvwrite(3)'s placement of `bytes`; on a terminal each newline
+  ///        also writes out the buffer.
+  auto PutLocked(std::string_view bytes) noexcept -> void {
+    while (!bytes.empty()) {
+      std::size_t chunk = bytes.size();
+      bool ends_line = false;
+      if (line_buffered_) {
+        if (const std::size_t newline = bytes.find('\n');
+            newline != std::string_view::npos) {
+          chunk = newline + 1;
+          ends_line = true;
+        }
+      }
+      PutChunkLocked(bytes.substr(0, chunk));
+      bytes.remove_prefix(chunk);
+      if (ends_line) {
+        FlushLocked();
+      }
+    }
+  }
+
+  auto PutChunkLocked(std::string_view chunk) noexcept -> void {
+    while (!chunk.empty()) {
+      const std::size_t room = capacity_ - buffer_.size();
+      if (!buffer_.empty() && chunk.size() > room) {
+        // Fill and flush.
+        buffer_.append(chunk.substr(0, room));
+        chunk.remove_prefix(room);
+        FlushLocked();
+      } else if (chunk.size() >= capacity_) {
+        // Write one buffer's worth directly.
+        WriteAll(chunk.substr(0, capacity_));
+        chunk.remove_prefix(capacity_);
+      } else {
+        // Fill and done.
+        buffer_.append(chunk);
+        chunk = {};
+      }
+    }
+  }
 
   auto FlushLocked() noexcept -> void {
-    std::string_view rest = buffer_;
+    WriteAll(buffer_);
+    buffer_.clear();
+  }
+
+  static auto WriteAll(std::string_view rest) noexcept -> void {
     while (!rest.empty()) {
       const ssize_t written = ::write(STDOUT_FILENO, rest.data(), rest.size());
       if (written < 0) {
@@ -181,12 +239,12 @@ class RemovedLog {
       }
       rest.remove_prefix(static_cast<std::size_t>(written));
     }
-    buffer_.clear();
   }
 
   std::mutex mutex_;
   std::string buffer_;
-  bool line_buffered_;
+  std::size_t capacity_ = kFallbackCapacity;
+  bool line_buffered_ = false;
 };
 
 /// @brief The name rm's diagnostics start with: getprogname(3), which is the
