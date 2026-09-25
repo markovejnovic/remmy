@@ -117,7 +117,7 @@ struct DirNode {
   ///
   /// Works on paths of any length, including those longer than PATH_MAX.
   /// Returns 0 on success, or -1 with errno set, like rmdir.
-  auto Remove(std::string& scratch) const noexcept -> int;
+  auto RemoveEmpty(std::string& scratch) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the

@@ -30,11 +30,6 @@ auto OpenAt(const cutils::os::Fd& dir, const char* name, int flags) noexcept
 
 /// @brief Open `path`, even when it is PATH_MAX bytes or longer.
 ///
-/// The kernel refuses such a path outright, so a long one is opened in pieces
-/// shorter than PATH_MAX, each relative to the last, holding at most two
-/// descriptors at a time. As when opening the whole path, symlinks are
-/// followed everywhere but in the final component (given O_NOFOLLOW).
-///
 /// Returns why it could not be opened on failure.
 auto OpenLong(std::string_view path, int flags) noexcept
     -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
@@ -116,7 +111,7 @@ auto DirNode::Open(std::string& path_buf) noexcept
   return {};
 }
 
-auto DirNode::Remove(std::string& scratch) const noexcept -> int {
+auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
   const std::string_view path = PathInto(scratch);
   if (path.size() < PATH_MAX) {
     return cutils::os::rmdir(path.data());
