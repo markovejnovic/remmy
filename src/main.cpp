@@ -379,6 +379,23 @@ constexpr auto IsUnlinkMode(std::string_view argv0) noexcept -> bool {
          "unlink";
 }
 
+/// @brief Whether BSD rm skips its guards for this command line.
+///
+/// Only unlink(1)'s one accepted shape, `unlink file` or `unlink -- file`,
+/// goes straight to unlink(2) without them; there "." and "/" are directories
+/// like any other. Every other unlink-mode command line is a usage error to
+/// rm and removes nothing, so until remmy reports those the same way, it keeps
+/// the guards for them: an option such as -r must never walk ".", ".." or "/".
+constexpr auto SkipsGuards(std::string_view argv0, std::span<char* const> args,
+                           std::size_t operand_count) noexcept -> bool {
+  if (!IsUnlinkMode(argv0) || operand_count != 1) {
+    return false;
+  }
+  // args excludes argv[0]: exactly the operand, or "--" and the operand.
+  return args.size() == 1 ||
+         (args.size() == 2 && std::string_view(args.front()) == "--");
+}
+
 /// @brief Asks BSD rm's -I question when it would; true to go ahead.
 ///
 /// rm asks once when, among the operands that exist (lstat(2)) and passed
@@ -471,15 +488,17 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
 }  // namespace
 
 auto main(int argc, char** argv) -> int {
+  const std::span<char* const> args(
+      argv, static_cast<std::size_t>(argc > 0 ? argc : 0));
+  const auto rest = args.empty() ? args : args.subspan(1);
   const auto cli = remmy::Argv{argc, argv}.TryParseOrAbort();
   if (!cli) {
     return cli.error();
   }
 
   const std::string_view prog = cli->ExecutableName();
-  // Called as unlink(1), rm has no guards: "." and "/" are directories there.
   const GuardedOperands guarded =
-      IsUnlinkMode(cli->ProgramName())
+      SkipsGuards(cli->ProgramName(), rest, cli->Operands().size())
           ? GuardedOperands{.kept = {cli->Operands().begin(),
                                      cli->Operands().end()}}
           : ApplyGuards(prog, cli->Operands());
