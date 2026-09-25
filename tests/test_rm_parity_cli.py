@@ -7,7 +7,8 @@ bytes, the same exit code and the same leftover tree as ``/bin/rm`` from
 file_cmds-487 (see ``parity``). The case ids are the ones the probes recorded in
 catalog-cli.json.
 
-remmy is not expected to pass these yet: they spell out what full parity means.
+The cases remmy does not pass yet are listed in ``parity_gaps`` and run as strict
+xfails.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from parity import (
     CLOSED,
     DEVNULL,
     FULL_PATH,
-    NOT_YET_AT_PARITY,
     Case,
     Dir,
     Fifo,
@@ -34,7 +34,6 @@ from parity import (
 
 pytestmark = [
     pytest.mark.parity,
-    NOT_YET_AT_PARITY,
     pytest.mark.skipif(sys.platform != "darwin", reason="BSD rm parity is macOS-only"),
 ]
 

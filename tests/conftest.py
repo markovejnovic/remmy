@@ -108,6 +108,13 @@ def _summary(title: str, only_left: Iterable[object], only_right: Iterable[objec
     ]
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark the parity cases remmy is known to fail as strict xfails (see ``parity_gaps``)."""
+    import parity_gaps
+
+    parity_gaps.mark_known_gaps(items)
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--remmy",

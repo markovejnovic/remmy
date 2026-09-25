@@ -44,12 +44,6 @@ import pytest
 
 RM = Path("/bin/rm")
 
-NOT_YET_AT_PARITY = pytest.mark.xfail(
-    strict=False,
-    reason="remmy does not yet match /bin/rm byte for byte; drop this marker once it does",
-)
-"""Applied to every parity module. Not strict: some cases already pass, and the
-report still lists each mismatch as an xfail."""
 PROGS = ("rm", "unlink", "remmy")
 """Names of the symlinks a case may execute; each points at the program under test."""
 
