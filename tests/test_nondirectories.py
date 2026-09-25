@@ -172,6 +172,21 @@ def test_missing_operand_reports_enoent(run: Runner, workdir: Path) -> None:
         assert os.strerror(errno.ENOENT) in res.stderr
 
 
+def test_force_silences_only_missing_operands(run: Runner, workdir: Path) -> None:
+    fstree.build(workdir, {"a": "", "f": "", "keep": ""})
+
+    res = run("-f", "ghost", "", "nodir/x", "a", "f/")
+
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert len(res.errors) == 1, res
+    with check:
+        assert res.stderr.endswith(f": f/: {os.strerror(errno.ENOTDIR)}\n"), res
+    with check:
+        assert fstree.listing(workdir) == {"f", "keep"}
+
+
 def test_failures_do_not_stop_later_operands(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"a": "", "b": "", "dir": {"x": ""}, "keep": ""})
 

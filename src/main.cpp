@@ -153,6 +153,13 @@ auto ReportError(std::string_view dir, std::string_view name,
   WriteStderr({ProgramName(), ": ", dir, "/", name, ": ", text.View(), "\n"});
 }
 
+/// @brief Whether an operand's failure is one to report: -f silences a missing
+///        operand (ENOENT, which also covers "" and paths through missing
+///        directories) and nothing else, as BSD rm does.
+auto Reportable(bool force, int error) noexcept -> bool {
+  return !force || error != ENOENT;
+}
+
 /// @brief Whether a directory is gone after rmdir(2) (or unlinkat(2) with
 ///        AT_REMOVEDIR) returned `status`: removed now or already missing.
 auto DirGone(int status) noexcept -> bool {
@@ -398,6 +405,19 @@ auto InteractiveWouldAsk(std::span<char* const> operands,
   });
 }
 
+/// @brief Whether BSD rm's -x (with -r or -R) could keep anything of these
+///        operands: only a walk crosses devices, so only when one of them is
+///        a directory (lstat(2)) that rm would walk, not "." or "..".
+auto OneFileSystemWouldMatter(std::span<char* const> operands) noexcept
+    -> bool {
+  return std::ranges::any_of(operands, [](const char* path) {
+    struct stat path_stat;
+    return !IsDotOrDotDotOperand(path) &&
+           cutils::os::lstat(path, &path_stat) == 0 &&
+           S_ISDIR(path_stat.st_mode);
+  });
+}
+
 /// @brief Refuses a command line remmy cannot yet honour safely; returns 1.
 ///
 /// Ignoring -i, -I, -W or -x would remove what rm would ask about or keep, so
@@ -439,11 +459,16 @@ auto main(int argc, char** argv) -> int {
         PromptOnceWouldAsk(cli->operands, cli->options.recursive)) {
       return ReportUnsupported(argv0, 'I');
     }
+    if (cli->options.one_file_system && cli->options.recursive &&
+        OneFileSystemWouldMatter(cli->operands)) {
+      return ReportUnsupported(argv0, 'x');
+    }
   }
 
+  const bool force = cli->options.force;
   const std::uint16_t threads = ThreadCount();
   FileUnlinkWorker prototype;
-  prototype.force_ = cli->options.force;
+  prototype.force_ = force;
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = 0;
@@ -457,15 +482,19 @@ auto main(int argc, char** argv) -> int {
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      ReportError(path, errno);
-      ++failures;
+      if (const int error = errno; Reportable(force, error)) {
+        ReportError(path, error);
+        ++failures;
+      }
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        ReportError(path, errno);
-        ++failures;
+        if (const int error = errno; Reportable(force, error)) {
+          ReportError(path, error);
+          ++failures;
+        }
       }
       continue;
     }
@@ -481,7 +510,7 @@ auto main(int argc, char** argv) -> int {
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
       // As in the walk: under -f, rm removes an unreadable empty directory.
-      if (!cli->options.force || !DirGone(cutils::os::rmdir(path))) {
+      if (!force || !DirGone(cutils::os::rmdir(path))) {
         ReportError(path, static_cast<int>(dirfd.error().code));
         ++failures;
       }

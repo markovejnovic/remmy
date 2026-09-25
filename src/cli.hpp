@@ -87,17 +87,13 @@ constexpr auto ApplyOption(Options& options, char letter) noexcept -> bool {
 ///        remove too much under, or '\0' when there is none.
 ///
 /// Such a command line must be refused before anything is touched: -W without
-/// -r undeletes rather than removes, and -x with -r keeps the walk on each
-/// operand's device. -W with -r only adds whiteouts to the walk and -x without
-/// -r changes nothing, so both are safe to ignore there. -i and -I depend on
-/// the operands; see the caller. -d, -P and -v never remove more than remmy
-/// already does without them.
+/// -r undeletes rather than removes. -W with -r only adds whiteouts to the
+/// walk, so it is safe to ignore there. -i, -I and -x depend on the operands;
+/// see the caller. -d, -P and -v never remove more than remmy already does
+/// without them.
 constexpr auto UnsupportedOption(const Options& options) noexcept -> char {
   if (options.undelete && !options.recursive) {
     return 'W';
-  }
-  if (options.one_file_system && options.recursive) {
-    return 'x';
   }
   return '\0';
 }

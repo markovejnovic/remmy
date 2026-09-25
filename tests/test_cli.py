@@ -164,6 +164,7 @@ def test_unimplemented_safety_options_refuse_everything(
         (("-I", "-r", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
         (("-rW", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
         (("-x", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
+        (("-rx", "f", "missing"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
     ],
 )
 def test_options_rm_would_not_act_on_are_ignored(
