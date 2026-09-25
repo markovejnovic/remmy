@@ -138,7 +138,7 @@ def _subtitle(ax: plt.Axes, theme: Theme, text: str) -> None:
 
 def _tree(run: Run, fixture: str) -> str:
     f = run.plan.fixture(fixture)
-    return f"{f.title} tree: {f.expected.files:,} files in {f.expected.dirs:,} directories"
+    return f"{f.expected.files:,} files in {f.expected.dirs:,} directories"
 
 
 def _label(run: Run, cell: Cell) -> str:
