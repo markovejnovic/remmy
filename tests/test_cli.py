@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import fstree
@@ -117,3 +119,26 @@ def test_dot_slash_prefix_removes_dash_prefixed_names(run: Runner, workdir: Path
         assert res.returncode == 0, res
     with check:
         assert fstree.listing(workdir) == {"keep"}
+
+
+# BSD rm still exits 64 when it cannot even print its usage.
+@pytest.mark.parametrize("args", [(), ("-z", "f")])
+def test_usage_with_stderr_closed_still_exits_64(remmy_bin: Path, workdir: Path, args: tuple[str, ...]) -> None:
+    fstree.build(workdir, {"f": "x"})
+    before = fstree.snapshot_dir(workdir)
+
+    proc = subprocess.run(
+        [str(remmy_bin), *args],
+        cwd=workdir,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        pass_fds=(),
+        preexec_fn=lambda: os.close(2),
+        check=False,
+    )
+
+    with check:
+        assert proc.returncode == 64
+    with check:
+        assert fstree.snapshot_dir(workdir) == before

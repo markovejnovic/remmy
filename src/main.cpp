@@ -45,9 +45,11 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -60,6 +62,7 @@
 #include <cutils/os/os.hpp>
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
+#include <initializer_list>
 #include <print>
 #include <span>
 #include <string>
@@ -264,15 +267,40 @@ constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
   return last == "." || last == "..";
 }
 
+/// @brief Writes the pieces to stderr in one writev(2), ignoring failures.
+///
+/// Unlike std::print, this cannot throw (which under -fno-exceptions would
+/// abort) when stderr is closed or full: rm itself exits normally then.
+auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
+    -> void {
+  static constexpr std::size_t kMaxPieces = 8;
+  std::array<iovec, kMaxPieces> iov{};
+  std::size_t count = 0;
+  for (const std::string_view piece : pieces) {
+    if (count == iov.size()) {
+      break;
+    }
+    // writev only reads the buffers; iov_base is merely declared mutable.
+    iov[count++] = iovec{.iov_base = const_cast<char*>(piece.data()),
+                         .iov_len = piece.size()};
+  }
+  while (::writev(STDERR_FILENO, iov.data(), static_cast<int>(count)) < 0 &&
+         errno == EINTR) {
+  }
+}
+
 /// @brief Prints BSD rm's answer to a rejected command line; returns 64.
 ///
 /// Like getopt(3), the illegal-option line names argv[0] exactly as given.
-auto ReportUsage(const char* argv0, remmy::UsageError error) -> int {
+auto ReportUsage(std::string_view argv0, remmy::UsageError error) noexcept
+    -> int {
   if (error.illegal_option != '\0') {
-    std::print(stderr, "{}: illegal option -- {}\n", argv0,
-               error.illegal_option);
+    WriteStderr({argv0, ": illegal option -- ",
+                 std::string_view(&error.illegal_option, 1), "\n",
+                 remmy::kUsage});
+  } else {
+    WriteStderr({remmy::kUsage});
   }
-  std::print(stderr, "{}", remmy::kUsage);
   return remmy::kExitUsage;
 }
 
