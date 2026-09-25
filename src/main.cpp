@@ -416,6 +416,23 @@ constexpr auto IsUnlinkMode(std::string_view argv0) noexcept -> bool {
          "unlink";
 }
 
+/// @brief Whether BSD rm skips its guards for this command line.
+///
+/// Only unlink(1)'s one accepted shape, `unlink file` or `unlink -- file`,
+/// goes straight to unlink(2) without them; there "." and "/" are directories
+/// like any other. Every other unlink-mode command line is a usage error to
+/// rm and removes nothing, so until remmy reports those the same way, it keeps
+/// the guards for them: an option such as -r must never walk ".", ".." or "/".
+constexpr auto SkipsGuards(std::string_view argv0, std::span<char* const> args,
+                           std::size_t operand_count) noexcept -> bool {
+  if (!IsUnlinkMode(argv0) || operand_count != 1) {
+    return false;
+  }
+  // args excludes argv[0]: exactly the operand, or "--" and the operand.
+  return args.size() == 1 ||
+         (args.size() == 2 && std::string_view(args.front()) == "--");
+}
+
 /// @brief Prints BSD rm's answer to a rejected command line; returns 64.
 ///
 /// Like getopt(3), the illegal-option line names argv[0] exactly as given.
@@ -506,15 +523,16 @@ auto main(int argc, char** argv) -> int {
   const std::span<char* const> args(
       argv, static_cast<std::size_t>(argc > 0 ? argc : 0));
   const char* argv0 = args.empty() ? "rm" : args.front();
-  const auto cli = remmy::ParseCli(args.empty() ? args : args.subspan(1));
+  const auto rest = args.empty() ? args : args.subspan(1);
+  const auto cli = remmy::ParseCli(rest);
   if (!cli) {
     return ReportUsage(argv0, cli.error());
   }
-  // Called as unlink(1), rm has no guards: "." and "/" are directories there.
   const GuardedOperands guarded =
-      IsUnlinkMode(argv0) ? GuardedOperands{.kept = {cli->operands.begin(),
-                                                     cli->operands.end()}}
-                          : ApplyGuards(cli->operands);
+      SkipsGuards(argv0, rest, cli->operands.size())
+          ? GuardedOperands{.kept = {cli->operands.begin(),
+                                     cli->operands.end()}}
+          : ApplyGuards(cli->operands);
   const std::span<const char* const> operands(guarded.kept);
   if (!operands.empty()) {
     if (const char option = remmy::UnsupportedOption(cli->options);

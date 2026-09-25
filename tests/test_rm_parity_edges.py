@@ -240,6 +240,15 @@ UNLINK = [
     Case("unlink_escaped_name", ["e\x1bx"], prog="unlink"),
     Case("unlink_legacy_dir", ["d"], (Dir("d"),), prog="unlink", env=LEGACY),
     Case("unlink_legacy_missing", ["nope"], prog="unlink", env=LEGACY),
+    # Only `unlink file` and `unlink -- file` skip the "." / ".." / "/" guards;
+    # rm rejects every other shape with its usage. An option must never make
+    # remmy walk one of these operands.
+    Case("unlink_dashdash_dot", ["--", "."], T, prog="unlink"),
+    Case("unlink_rf_dot", ["-rf", "."], T, prog="unlink"),
+    Case("unlink_r_dotdot_from_subdir", ["-r", ".."], T, cwd="d", prog="unlink"),
+    Case("unlink_r_nested_dotdot", ["-r", "d/sub/.."], T, prog="unlink"),
+    Case("unlink_rf_slash_sandboxed", ["-rf", "/"], prog="unlink"),
+    Case("unlink_argv0_rf_dot", ["-rf", "."], T, argv0="unlink"),
 ]
 
 

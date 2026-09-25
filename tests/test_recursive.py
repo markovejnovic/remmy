@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import os
+import subprocess
 from pathlib import Path
 
 import fstree
@@ -230,6 +231,30 @@ def test_dot_and_dotdot_operands_are_refused(run: Runner, workdir: Path, operand
         assert res.returncode == 1, res
     with check:
         assert res.stderr, res
+    with check:
+        assert fstree.snapshot_dir(workdir) == before
+
+
+@pytest.mark.parametrize("via", ["symlink", "argv0"])
+@pytest.mark.parametrize("args", [["-r", "."], ["-rf", "."], ["-r", ".."], ["-rf", "sub/.."], ["-R", "./"]])
+def test_unlink_mode_options_never_walk_dot_operands(
+    remmy_bin: Path, tmp_path: Path, workdir: Path, args: list[str], via: str
+) -> None:
+    """Invoked as unlink(1), rm rejects any option with its usage; remmy must at least keep the dot guard there."""
+    fstree.build(workdir, {"keep": "x", "a": {"f": "x", "b": {"g": "x", "sub": {"h": "x"}}}})
+    before = fstree.snapshot_dir(workdir)
+    if via == "symlink":
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        (bindir / "unlink").symlink_to(remmy_bin)
+        cmd, executable = [str(bindir / "unlink"), *args], None
+    else:
+        cmd, executable = ["unlink", *args], remmy_bin
+
+    res = subprocess.run(cmd, executable=executable, cwd=workdir / "a" / "b", capture_output=True, check=False)
+
+    with check:
+        assert res.returncode != 0, res
     with check:
         assert fstree.snapshot_dir(workdir) == before
 

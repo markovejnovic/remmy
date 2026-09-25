@@ -221,7 +221,8 @@ GAPS: dict[str, Gap] = {
             "When basename(argv[0]) is 'unlink', rm acts as unlink(1): no options, a leading '--' is skipped only "
             "before a single operand, anything but exactly one operand prints the usage and exits 64, and the "
             "operand is unlink(2)ed ('is a directory' for directories including '.', '..' and '/'; no dot or "
-            "slash guard, no prompts)."
+            "slash guard, no prompts). remmy skips the guards only for that accepted shape; in any other "
+            "unlink-mode shape it still refuses '.', '..' and '/' (exit 1) instead of printing the usage."
         ),
         cases=frozenset(
             {
@@ -233,8 +234,13 @@ GAPS: dict[str, Gap] = {
                 "test_rm_parity_cli.py::test_invocation_names[unlink_opt_f]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_opt_f_file]",
                 "test_rm_parity_cli.py::test_invocation_names[unlink_two]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_argv0_rf_dot]",
                 "test_rm_parity_edges.py::test_unlink_mode[unlink_dash_then_second]",
                 "test_rm_parity_edges.py::test_unlink_mode[unlink_dashdash_prefixed_name]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_r_dotdot_from_subdir]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_r_nested_dotdot]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_rf_dot]",
+                "test_rm_parity_edges.py::test_unlink_mode[unlink_rf_slash_sandboxed]",
                 "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_flag]",
                 "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_two]",
                 "test_rm_parity_fs.py::test_invocation_names[exe_rm_argv0_unlink_two_operands]",
