@@ -45,23 +45,26 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <cutils/clppap/report.hpp>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
 #include <cutils/os/limits/fd.hpp>
 #include <cutils/os/os.hpp>
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
+#include <initializer_list>
 #include <print>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -264,6 +267,76 @@ constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
   return last == "." || last == "..";
 }
 
+/// @brief Writes the pieces to stderr in one writev(2), ignoring failures.
+///
+/// Unlike std::print, this cannot throw (which under -fno-exceptions would
+/// abort) when stderr is closed or full: rm itself exits normally then.
+auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
+    -> void {
+  static constexpr std::size_t kMaxPieces = 8;
+  std::array<iovec, kMaxPieces> iov{};
+  std::size_t count = 0;
+  for (const std::string_view piece : pieces) {
+    if (count == iov.size()) {
+      break;
+    }
+    // writev only reads the buffers; iov_base is merely declared mutable.
+    iov[count++] = iovec{.iov_base = const_cast<char*>(piece.data()),
+                         .iov_len = piece.size()};
+  }
+  while (::writev(STDERR_FILENO, iov.data(), static_cast<int>(count)) < 0 &&
+         errno == EINTR) {
+  }
+}
+
+/// @brief Prints BSD rm's answer to a rejected command line; returns 64.
+///
+/// Like getopt(3), the illegal-option line names argv[0] exactly as given.
+auto ReportUsage(std::string_view argv0, remmy::UsageError error) noexcept
+    -> int {
+  if (error.illegal_option != '\0') {
+    WriteStderr({argv0, ": illegal option -- ",
+                 std::string_view(&error.illegal_option, 1), "\n",
+                 remmy::kUsage});
+  } else {
+    WriteStderr({remmy::kUsage});
+  }
+  return remmy::kExitUsage;
+}
+
+/// @brief Whether BSD rm's -I would ask before removing these operands.
+///
+/// rm asks once when, among the operands that exist (lstat(2)) and are not
+/// "." or "..", there is a directory under -r or -R, or more than three in
+/// all. Otherwise -I changes nothing.
+auto PromptOnceWouldAsk(std::span<char* const> operands,
+                        bool recursive) noexcept -> bool {
+  static constexpr std::size_t kMaxSilentOperands = 3;
+  std::size_t existing = 0;
+  for (const char* path : operands) {
+    struct stat path_stat;
+    if (IsDotOrDotDotOperand(path) ||
+        cutils::os::lstat(path, &path_stat) != 0) {
+      continue;
+    }
+    if (recursive && S_ISDIR(path_stat.st_mode)) {
+      return true;
+    }
+    ++existing;
+  }
+  return existing > kMaxSilentOperands;
+}
+
+/// @brief Refuses a command line remmy cannot yet honour safely; returns 1.
+///
+/// Ignoring -i, -I, -W or -x would remove what rm would ask about or keep, so
+/// nothing is touched instead.
+auto ReportUnsupported(std::string_view argv0, char option) noexcept -> int {
+  WriteStderr({argv0, ": -", std::string_view(&option, 1),
+               ": not supported yet; nothing was removed\n"});
+  return 1;
+}
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -275,16 +348,29 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
 }  // namespace
 
 auto main(int argc, char** argv) -> int {
-  const auto cli_opts = cpplap::ParseOrReport<remmy::Cli>(argc, argv);
-  if (!cli_opts) {
-    return cli_opts.error();
+  const std::span<char* const> args(
+      argv, static_cast<std::size_t>(argc > 0 ? argc : 0));
+  const char* argv0 = args.empty() ? "rm" : args.front();
+  const auto cli = remmy::ParseCli(args.empty() ? args : args.subspan(1));
+  if (!cli) {
+    return ReportUsage(argv0, cli.error());
+  }
+  if (!cli->operands.empty()) {
+    if (const char option = remmy::UnsupportedOption(cli->options);
+        option != '\0') {
+      return ReportUnsupported(argv0, option);
+    }
+    if (cli->options.prompt_once &&
+        PromptOnceWouldAsk(cli->operands, cli->options.recursive)) {
+      return ReportUnsupported(argv0, 'I');
+    }
   }
 
   const std::uint16_t threads = ThreadCount();
   Scheduler scheduler(threads);
 
   std::size_t failures = 0;
-  for (const char* path : cli_opts->positional) {
+  for (const char* path : cli->operands) {
     if (IsDotOrDotDotOperand(path)) {
       std::println(stderr,
                    "cannot remove '{}': '.' and '..' may not be removed", path);
@@ -309,7 +395,7 @@ auto main(int argc, char** argv) -> int {
       continue;
     }
 
-    if (!cli_opts->is_recursive) {
+    if (!cli->options.recursive) {
       std::println(stderr, "cannot remove '{}': {}", path,
                    std::strerror(EISDIR));
       ++failures;
