@@ -74,30 +74,6 @@ def mark_known_gaps(items: list[pytest.Item]) -> None:
 
 
 GAPS: dict[str, Gap] = {
-    "directory-d": Gap(
-        reason=(
-            "-d without -r removes a directory with rmdir(2): an empty one goes, a non-empty one fails with "
-            "'Directory not empty' ('//' with 'Is a directory', a mount point with 'Resource busy'); 'l/' rmdirs "
-            "the link's target. With -r, -d changes nothing."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_cli.py::test_directories[emptydir_d]",
-                "test_rm_parity_cli.py::test_directories[nonemptydir_d]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slashslash_d]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[slashes_only_d]",
-                "test_rm_parity_edges.py::test_mount_operands[d_mountpoint]",
-                "test_rm_parity_edges.py::test_symlinks_to_directories[d_symlink_to_nonempty_dir_slash]",
-                "test_rm_parity_fs.py::test_file_flags[uchg_empty_dir_d]",
-                "test_rm_parity_fs.py::test_file_flags[uchg_empty_dir_df]",
-                "test_rm_parity_fs.py::test_missing_and_directories[empty_dir_d]",
-                "test_rm_parity_fs.py::test_missing_and_directories[nonempty_dir_d]",
-                "test_rm_parity_fs.py::test_missing_and_directories[nonempty_dir_df]",
-                "test_rm_parity_fs.py::test_missing_and_directories[rd_nested_empty_dirs]",
-                "test_rm_parity_fs.py::test_path_shapes[dir_trailing_slash_d]",
-            }
-        ),
-    ),
     "verbose": Gap(
         reason=(
             "-v prints every removed path on stdout: top-level operands exactly as typed ('./a', 'd//x', raw "
