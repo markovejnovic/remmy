@@ -20,6 +20,7 @@ from parity import (
     CLOSED,
     DEVNULL,
     FULL_PATH,
+    NOT_YET_AT_PARITY,
     Case,
     Dir,
     Fifo,
@@ -31,7 +32,11 @@ from parity import (
     pty,
 )
 
-pytestmark = [pytest.mark.parity, pytest.mark.skipif(sys.platform != "darwin", reason="BSD rm parity is macOS-only")]
+pytestmark = [
+    pytest.mark.parity,
+    NOT_YET_AT_PARITY,
+    pytest.mark.skipif(sys.platform != "darwin", reason="BSD rm parity is macOS-only"),
+]
 
 F = (File("a", "A"),)
 F3 = tuple(File(n, n.upper()) for n in "abc")

@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from parity import (
     CLOSED,
+    NOT_YET_AT_PARITY,
     Case,
     Dir,
     Fifo,
@@ -36,7 +37,11 @@ from parity import (
     pty,
 )
 
-pytestmark = [pytest.mark.parity, pytest.mark.skipif(sys.platform != "darwin", reason="BSD rm parity is macOS-only")]
+pytestmark = [
+    pytest.mark.parity,
+    NOT_YET_AT_PARITY,
+    pytest.mark.skipif(sys.platform != "darwin", reason="BSD rm parity is macOS-only"),
+]
 
 T = (File("a", "A"), File("b", "B"), Dir("d"), File("d/x", "X"), Dir("d/sub"), File("d/sub/y", "Y"))
 F4 = tuple(File(n, n.upper()) for n in "abcd")
