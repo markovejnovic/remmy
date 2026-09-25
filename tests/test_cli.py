@@ -121,6 +121,63 @@ def test_dot_slash_prefix_removes_dash_prefixed_names(run: Runner, workdir: Path
         assert fstree.listing(workdir) == {"keep"}
 
 
+# Until remmy implements them, the options that would make rm ask or keep something
+# refuse the whole command line instead of silently removing it all.
+@pytest.mark.parametrize(
+    ("args", "letter"),
+    [
+        (("-i", "f"), "i"),
+        (("-r", "-i", "d"), "i"),
+        (("-fi", "f"), "i"),
+        (("-f", "-i", "f"), "i"),
+        (("-I", "-r", "d"), "I"),
+        (("-I", "f", "g", "h", "d"), "I"),
+        (("-If", "f", "g", "h", "d"), "I"),
+        (("-W", "f"), "W"),
+        (("-fW", "f"), "W"),
+        (("-rx", "d"), "x"),
+    ],
+)
+def test_unimplemented_safety_options_refuse_everything(
+    run: Runner, workdir: Path, args: tuple[str, ...], letter: str
+) -> None:
+    fstree.build(workdir, {"f": "x", "g": "x", "h": "x", "d": {"x": "x", "sub": {"y": "y"}}})
+    before = fstree.snapshot_dir(workdir)
+
+    res = run(*args)
+
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert res.stderr.endswith(f": -{letter}: not supported yet; nothing was removed\n"), res.stderr
+    with check:
+        assert fstree.snapshot_dir(workdir) == before
+
+
+# Where rm would neither ask nor keep anything, those options change nothing.
+@pytest.mark.parametrize(
+    ("args", "left"),
+    [
+        (("-if", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
+        (("-I", "f", "g", "missing", "d"), {"d", "d/x", "d/sub", "d/sub/y"}),
+        (("-I", "-r", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
+        (("-rW", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
+        (("-x", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
+    ],
+)
+def test_options_rm_would_not_act_on_are_ignored(
+    run: Runner, workdir: Path, args: tuple[str, ...], left: set[str]
+) -> None:
+    fstree.build(workdir, {"f": "x", "g": "x", "d": {"x": "x", "sub": {"y": "y"}}})
+
+    res = run(*args)
+
+    with check:
+        assert res.stderr == "" or "is a directory" in res.stderr or "Is a directory" in res.stderr, res
+    with check:
+        assert fstree.listing(workdir) == left
+
+
 # BSD rm still exits 64 when it cannot even print its usage.
 @pytest.mark.parametrize("args", [(), ("-z", "f")])
 def test_usage_with_stderr_closed_still_exits_64(remmy_bin: Path, workdir: Path, args: tuple[str, ...]) -> None:

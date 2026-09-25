@@ -83,6 +83,29 @@ constexpr auto ApplyOption(Options& options, char letter) noexcept -> bool {
   }
 }
 
+/// @brief The first parsed option remmy cannot honour yet and would otherwise
+///        remove too much under, or '\0' when there is none.
+///
+/// Such a command line must be refused before anything is touched: an
+/// effective -i (so not one a later -f overrode) asks before every removal,
+/// -W without -r undeletes rather than removes, and -x with -r keeps the walk
+/// on each operand's device. -W with -r only adds whiteouts to the walk and -x
+/// without -r changes nothing, so both are safe to ignore there. -I depends on
+/// the operands; see the caller. -d, -P and -v never remove more than remmy
+/// already does without them.
+constexpr auto UnsupportedOption(const Options& options) noexcept -> char {
+  if (options.interactive) {
+    return 'i';
+  }
+  if (options.undelete && !options.recursive) {
+    return 'W';
+  }
+  if (options.one_file_system && options.recursive) {
+    return 'x';
+  }
+  return '\0';
+}
+
 /// @brief Parses the arguments after argv[0] the way BSD rm does.
 ///
 /// Options may be clustered and repeated. Parsing stops at the first operand,
