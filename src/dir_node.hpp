@@ -10,7 +10,6 @@
 #include <expected>
 #include <iterator>
 #include <string>
-#include <system_error>
 
 namespace remmy {
 
@@ -109,7 +108,8 @@ struct DirNode {
   ///                 an absolute path.
   ///
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
-  auto Open(std::string& scratch) noexcept -> std::expected<void, std::errc>;
+  auto Open(std::string& scratch) noexcept
+      -> std::expected<void, cutils::os::OpenError>;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the

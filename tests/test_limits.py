@@ -8,7 +8,7 @@ from pathlib import Path
 import fstree
 import pytest
 from harness import Runner
-from known_bugs import GIVES_UP_ON_EMFILE_UNDER_CONTENTION, PATH_MAX_EXCEEDED
+from known_bugs import PATH_MAX_EXCEEDED
 from pytest_check import check
 
 # macOS PATH_MAX; Linux is 4096. Chains below exceed both.
@@ -17,11 +17,7 @@ PATH_MAX = os.pathconf("/", "PC_PATH_MAX")
 
 @pytest.mark.stress
 @pytest.mark.parametrize("fd_limit", [12, 16, 32, 64])
-def test_wide_tree_under_tight_fd_limit(
-    run: Runner, workdir: Path, fd_limit: int, threads: int, request: pytest.FixtureRequest
-) -> None:
-    if threads >= fd_limit:
-        request.applymarker(GIVES_UP_ON_EMFILE_UNDER_CONTENTION)
+def test_wide_tree_under_tight_fd_limit(run: Runner, workdir: Path, fd_limit: int, threads: int) -> None:
     fstree.build(
         workdir,
         {"t": {f"d{i}": {f"e{j}": {"f": ""} for j in range(6)} for i in range(300)}},

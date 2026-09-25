@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <cutils/os/fd.hpp>
 #include <cutils/os/limits/fd.hpp>
+#include <cutils/os/os.hpp>
+#include <optional>
 #include <system_error>
 #include <vector>
 
@@ -136,60 +138,84 @@ SCENARIO("Raising the soft limit above the hard limit is refused", "[limits]") {
   }
 }
 
-SCENARIO("The pool learns the descriptor ceiling from actual exhaustion",
+SCENARIO("A refused open says whether waiting on our descriptors can help",
          "[limits]") {
-  GIVEN("a lowered hard limit and no live descriptors") {
+  GIVEN("a lowered hard limit") {
     const auto hard = LowerHard();
-    REQUIRE(Pool::Live() == 0);
-
     THEN("capacity matches the hard limit and the pool is not exhausted") {
       REQUIRE(Pool::Capacity() == hard);
       REQUIRE_FALSE(Pool::Exhausted());
     }
-    WHEN("exhaustion is noted while nothing is held") {
-      Pool::NoteExhaustion();
-      THEN("it is ignored") { REQUIRE_FALSE(Pool::Exhausted()); }
-    }
-    WHEN("descriptors are opened until the kernel refuses") {
-      // Observe everything before asserting: while no descriptor is free,
-      // sanitizer runtimes (which probe memory through a pipe) and Catch's
-      // reporting cannot run, so the descriptors are released first.
-      std::vector<Fd> held;
-      int failure = 0;
+
+    // Observe everything before asserting: while no descriptor is free,
+    // sanitizer runtimes (which probe memory through a pipe) and Catch's
+    // reporting cannot run, so the descriptors are released first.
+    WHEN("the limit is filled by descriptors the pool does not own") {
+      std::vector<int> foreign;
       for (;;) {
         const int raw = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
         if (raw < 0) {
-          failure = errno;
           break;
         }
-        held.emplace_back(raw);
+        foreign.push_back(raw);
       }
-      const std::size_t opened = held.size();
-      const auto live_when_full = Pool::Live();
-      Pool::NoteExhaustion();
+      const auto refused = cutils::os::open("/dev/null", O_RDONLY | O_CLOEXEC);
+      const bool exhausted = Pool::Exhausted();
+      for (const int raw : foreign) {
+        ::close(raw);
+      }
+
+      THEN("the refusal is EMFILE and not retryable") {
+        REQUIRE_FALSE(refused);
+        REQUIRE(refused.error().code == std::errc::too_many_files_open);
+        REQUIRE_FALSE(refused.error().retryable);
+      }
+      THEN("the pool learns no ceiling from it") { REQUIRE_FALSE(exhausted); }
+    }
+    WHEN("the limit is filled by descriptors the pool owns") {
+      std::vector<Fd> held;
+      std::optional<cutils::os::OpenError> refusal;
+      for (;;) {
+        auto opened = cutils::os::open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (!opened) {
+          refusal = opened.error();
+          break;
+        }
+        held.push_back(*std::move(opened));
+      }
       const bool exhausted_when_full = Pool::Exhausted();
       if (!held.empty()) {
         held.pop_back();
       }
       const bool exhausted_after_one = Pool::Exhausted();
       held.clear();
-      const auto live_after_all = Pool::Live();
 
-      THEN("the refusal is EMFILE and every descriptor was counted") {
-        REQUIRE(failure == EMFILE);
-        REQUIRE(opened > 0);
-        REQUIRE(live_when_full == opened);
+      THEN("the refusal is EMFILE and retryable") {
+        REQUIRE(refusal);
+        REQUIRE(refusal->code == std::errc::too_many_files_open);
+        REQUIRE(refusal->retryable);
       }
-      THEN("noting the exhaustion marks the pool exhausted") {
+      THEN("the refusal marks the pool exhausted") {
         REQUIRE(exhausted_when_full);
       }
       THEN("releasing one descriptor ends the exhaustion") {
         REQUIRE_FALSE(exhausted_after_one);
       }
-      THEN("releasing every descriptor returns the live count to zero") {
-        REQUIRE(live_after_all == 0);
+    }
+  }
+}
+
+SCENARIO("An open failing for another reason is never retryable", "[limits]") {
+  GIVEN("a path that does not exist") {
+    WHEN("it is opened") {
+      const auto missing =
+          cutils::os::open("/nonexistent/cutils", O_RDONLY | O_CLOEXEC);
+      THEN("the error is ENOENT and not retryable") {
+        REQUIRE_FALSE(missing);
+        REQUIRE(missing.error().code == std::errc::no_such_file_or_directory);
+        REQUIRE_FALSE(missing.error().retryable);
       }
     }
   }
 }
-}
+}  // namespace

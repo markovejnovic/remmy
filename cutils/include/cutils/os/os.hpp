@@ -46,15 +46,17 @@ using RawDirent = ::dirent;
 using RawDirent = ::dirent64;
 #endif
 
-/// @brief Returns an owning Fd; an empty one means failure, with errno set.
-[[nodiscard]] inline auto open(const char* path, int flags) noexcept -> Fd {
-  return Fd{::open(path, flags)};
+/// @brief Returns an owning Fd, or why it could not be opened.
+[[nodiscard]] inline auto open(const char* path, int flags) noexcept
+    -> std::expected<Fd, OpenError> {
+  return Fd::Open([&] { return ::open(path, flags); });
 }
 
-/// @brief Returns an owning Fd; an empty one means failure, with errno set.
+/// @brief Returns an owning Fd, or why it could not be opened.
 [[nodiscard]] inline auto openat(const Fd& dir, const char* name,
-                                 int flags) noexcept -> Fd {
-  return Fd{::openat(dir.get(), name, flags)};
+                                 int flags) noexcept
+    -> std::expected<Fd, OpenError> {
+  return Fd::Open([&] { return ::openat(dir.get(), name, flags); });
 }
 
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {

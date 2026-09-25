@@ -3,13 +3,11 @@
 #include "dir_node.hpp"
 
 #include <algorithm>
-#include <cerrno>
 #include <cstddef>
 #include <expected>
 #include <string>
-#include <system_error>
+#include <utility>
 
-#include "cutils/os/limits/fd.hpp"
 #include "cutils/os/os.hpp"
 
 namespace remmy {
@@ -50,22 +48,18 @@ auto DirNode::PathInto(std::string& out) const -> const char* {
 }
 
 auto DirNode::Open(std::string& path_buf) noexcept
-    -> std::expected<void, std::errc> {
+    -> std::expected<void, cutils::os::OpenError> {
   if (fd_.IsOpen()) {
     return {};
   }
 
-  fd_ = cutils::os::open(PathInto(path_buf),
-                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd_.IsOpen()) {
-    return {};
+  auto opened = cutils::os::open(
+      PathInto(path_buf), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (!opened) {
+    return std::unexpected(opened.error());
   }
-
-  if (errno == EMFILE || errno == ENFILE) {
-    cutils::os::limits::fd::Pool::NoteExhaustion();
-  }
-
-  return std::unexpected(static_cast<std::errc>(errno));
+  fd_ = *std::move(opened);
+  return {};
 }
 
 }  // namespace remmy

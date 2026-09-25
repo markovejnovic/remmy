@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
 #include <cutils/os/fd.hpp>
-#include <cutils/os/limits/fd.hpp>
+#include <cutils/os/os.hpp>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -17,12 +17,11 @@ using cutils::os::Fd;
 static_assert(sizeof(Fd) == sizeof(int));
 static_assert(sizeof(std::optional<Fd>) == sizeof(Fd));
 
-auto OpenRaw() -> int {
-  const int fd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
-  REQUIRE(fd >= 0);
-  return fd;
+auto OpenNull() -> Fd {
+  auto fd = cutils::os::open("/dev/null", O_RDONLY | O_CLOEXEC);
+  REQUIRE(fd);
+  return *std::move(fd);
 }
-auto OpenNull() -> Fd { return Fd{OpenRaw()}; }
 
 auto IsOpen(int fd) -> bool { return ::fcntl(fd, F_GETFD) != -1; }
 auto IsClosed(int fd) -> bool {
@@ -181,7 +180,7 @@ SCENARIO("Optional Fd construction and reset manage ownership", "[fd]") {
     }
   }
   GIVEN("an optional constructed in place with an open descriptor") {
-    std::optional<Fd> inplace{std::in_place, OpenRaw()};
+    std::optional<Fd> inplace{std::in_place, OpenNull()};
     REQUIRE(inplace.has_value());
     const int watched = inplace->get();
     REQUIRE(IsOpen(watched));
@@ -264,12 +263,12 @@ SCENARIO("Emplacing and swapping optional Fds preserves ownership", "[fd]") {
   GIVEN("a disengaged optional") {
     std::optional<Fd> held;
     WHEN("an open descriptor is emplaced") {
-      Fd& placed = held.emplace(OpenRaw());
+      Fd& placed = held.emplace(OpenNull());
       REQUIRE(held.has_value());
       const int first = placed.get();
 
       AND_WHEN("another descriptor is emplaced") {
-        held.emplace(OpenRaw());
+        held.emplace(OpenNull());
         THEN("the previous descriptor is closed") { REQUIRE(IsClosed(first)); }
 
         AND_WHEN("the value is swapped into a disengaged optional") {
@@ -371,76 +370,4 @@ SCENARIO("Optional Fd supports mapping, chaining and recovery", "[fd]") {
     }
   }
 }
-}
-
-SCENARIO("The descriptor pool counts owned descriptors", "[fd]") {
-  using cutils::os::Fd;
-  using cutils::os::limits::fd::Pool;
-
-  GIVEN("the current live descriptor count") {
-    const auto start = Pool::Live();
-    REQUIRE(!Fd{}.IsOpen());
-    REQUIRE(Pool::Live() == start);
-
-    WHEN("descriptors are opened, closed repeatedly and move-constructed") {
-      {
-        Fd a = OpenNull();
-        REQUIRE(a.IsOpen());
-        REQUIRE(Pool::Live() == start + 1);
-        {
-          Fd b = OpenNull();
-          REQUIRE(Pool::Live() == start + 2);
-          b.Close();
-          REQUIRE(Pool::Live() == start + 1);
-          b.Close();
-          REQUIRE(Pool::Live() == start + 1);
-        }
-        REQUIRE(Pool::Live() == start + 1);
-
-        Fd moved = std::move(a);
-        REQUIRE(moved.IsOpen());
-        REQUIRE(Pool::Live() == start + 1);
-      }
-      THEN("destruction returns the count to its starting value") {
-        REQUIRE(Pool::Live() == start);
-      }
-    }
-    WHEN("move assignment replaces an owned descriptor") {
-      {
-        Fd a = OpenNull();
-        Fd b = OpenNull();
-        REQUIRE(Pool::Live() == start + 2);
-        b = std::move(a);
-        REQUIRE(Pool::Live() == start + 1);
-      }
-      THEN("destruction returns the count to its starting value") {
-        REQUIRE(Pool::Live() == start);
-      }
-    }
-    WHEN("ownership is released to a raw descriptor") {
-      {
-        Fd a = OpenNull();
-        REQUIRE(Pool::Live() == start + 1);
-        const int raw = a.Release();
-        REQUIRE(Pool::Live() == start);
-        REQUIRE(::close(raw) == 0);
-      }
-      THEN("the raw descriptor is no longer counted") {
-        REQUIRE(Pool::Live() == start);
-      }
-    }
-    WHEN("an optional acquires and resets an owned descriptor") {
-      {
-        const std::optional<Fd> none;
-        REQUIRE(Pool::Live() == start);
-        std::optional<Fd> held{OpenNull()};
-        REQUIRE(Pool::Live() == start + 1);
-        held.reset();
-        REQUIRE(Pool::Live() == start);
-      }
-      THEN("destruction leaves the count at its starting value") {
-        REQUIRE(Pool::Live() == start);
-      }
-    }
-  }
 }

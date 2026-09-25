@@ -19,7 +19,41 @@
 namespace cutils::os::limits::fd {
 namespace {
 
-std::atomic<std::uint64_t> live_fds{0};
+class AtomicLeases {
+ public:
+  [[nodiscard]] auto Load() const noexcept -> Leases {
+    return Unpack(bits_.load(std::memory_order_relaxed));
+  }
+
+  auto Acquire() noexcept -> Leases {
+    return Unpack(bits_.fetch_add(kAcquire, std::memory_order_relaxed));
+  }
+
+  void Release() noexcept {
+    bits_.fetch_add(kRelease, std::memory_order_relaxed);
+  }
+
+  void Forget() noexcept {
+    bits_.fetch_sub(kAcquire, std::memory_order_relaxed);
+  }
+
+ private:
+  static constexpr unsigned kEpochShift = 32;
+  static constexpr std::uint64_t kAcquire = 1;
+  static constexpr std::uint64_t kRelease =
+      (std::uint64_t{1} << kEpochShift) - kAcquire;
+
+  [[nodiscard]] static constexpr auto Unpack(std::uint64_t bits) noexcept
+      -> Leases {
+    return {.live = static_cast<std::uint32_t>(bits),
+            .epoch = static_cast<std::uint32_t>(bits >> kEpochShift)};
+  }
+
+  std::atomic<std::uint64_t> bits_{0};
+};
+
+AtomicLeases leases;
+
 std::atomic<std::uint64_t> known_capacity{0};
 std::atomic<std::uint64_t> observed_ceiling{0};
 std::atomic_flag raise_attempted = ATOMIC_FLAG_INIT;
@@ -121,36 +155,45 @@ auto SetMax() noexcept -> std::expected<std::uint64_t, std::errc> {
   return target;
 }
 
-auto Pool::Live() noexcept -> std::uint64_t {
-  return live_fds.load(std::memory_order_relaxed);
-}
-
 auto Pool::Capacity() noexcept -> std::uint64_t { return CapacityImpl(); }
-
-void Pool::NoteAcquired() noexcept {
-  const auto live = live_fds.fetch_add(1, std::memory_order_relaxed) + 1;
-  RaiseIfNeeded(live);
-}
-
-void Pool::NoteReleased() noexcept {
-  live_fds.fetch_sub(1, std::memory_order_relaxed);
-}
-
-void Pool::NoteExhaustion() noexcept {
-  const auto live = live_fds.load(std::memory_order_relaxed);
-  if (live == 0) {
-    return;  // Nothing of ours was open; the pressure is not ours to model.
-  }
-  auto ceiling = observed_ceiling.load(std::memory_order_relaxed);
-  while ((ceiling == 0 || live < ceiling) &&
-         !observed_ceiling.compare_exchange_weak(ceiling, live,
-                                                 std::memory_order_relaxed)) {
-  }
-}
 
 auto Pool::Exhausted() noexcept -> bool {
   const auto ceiling = observed_ceiling.load(std::memory_order_relaxed);
-  return ceiling != 0 && Live() >= ceiling;
+  return ceiling != 0 && leases.Load().live >= ceiling;
+}
+
+auto Pool::Reserve() noexcept -> Reservation {
+  const auto before = leases.Acquire();
+  RaiseIfNeeded(std::uint64_t{before.live} + 1);
+  return Reservation{before};
+}
+
+void Pool::Release() noexcept { leases.Release(); }
+
+void Pool::Forget() noexcept { leases.Forget(); }
+
+Pool::Reservation::~Reservation() {
+  if (armed_) {
+    leases.Forget();  // The open failed: no slot was handed out, none freed.
+  }
+}
+
+void Pool::Reservation::Claim() && noexcept { armed_ = false; }
+
+auto Pool::Reservation::Refused() && noexcept -> bool {
+  armed_ = false;
+  leases.Forget();
+
+  if (const std::uint64_t held = before_.live; held != 0) {
+    auto ceiling = observed_ceiling.load(std::memory_order_relaxed);
+    while ((ceiling == 0 || held < ceiling) &&
+           !observed_ceiling.compare_exchange_weak(ceiling, held,
+                                                   std::memory_order_relaxed)) {
+    }
+  }
+
+  const auto now = leases.Load();
+  return now.live != 0 || now.epoch != before_.epoch;
 }
 
 }  // namespace cutils::os::limits::fd
