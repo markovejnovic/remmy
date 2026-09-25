@@ -100,9 +100,6 @@ cmake --build --preset release
 cp build/gcc-release/remmy /usr/local/bin/
 ```
 
-On Linux, Homebrew's GCC works as is. With another GCC 16 install, point the
-preset at it: `cmake --preset release -DCMAKE_CXX_COMPILER=g++`.
-
 ## Usage
 
 ```sh
