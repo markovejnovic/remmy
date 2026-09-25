@@ -15,6 +15,11 @@ blocked by several gaps is listed under the last one in that order that it needs
 so it starts passing with that gap's fix and not before. ``DEFERRED`` holds cases
 that are out of scope by decision; they stay xfailed.
 
+A case that remmy passes or fails depending on thread timing is also listed in its
+gap's ``timing_dependent``: its xfail is not strict, so it may XPASS by chance
+without failing the suite. The ledger cannot catch a stale entry there, so a fix
+must remove such a case by hand. Every other case stays strict.
+
 Keys are ``<module file>::<test name>[<case id>]``, the node id without the
 directory, so they do not depend on where pytest is started from.
 
@@ -42,6 +47,10 @@ class Gap:
     """What BSD rm does that remmy does not, in one paragraph."""
     cases: frozenset[str]
     """Keys (``module.py::test[case]``) of the cases this gap is the last blocker of."""
+    timing_dependent: frozenset[str] = frozenset()
+    """The keys among ``cases`` whose outcome depends on thread timing, so that remmy can
+    match ``/bin/rm`` by chance on one run and not the next. Their xfail is not strict: a
+    chance pass is reported as XPASS instead of failing the suite."""
 
 
 def item_key(item: pytest.Item) -> str:
@@ -60,119 +69,31 @@ def ledger() -> dict[str, tuple[str, Gap]]:
 
 
 def mark_known_gaps(items: list[pytest.Item]) -> None:
-    """Add a strict xfail to every parity item the ledger lists."""
+    """Add an xfail to every parity item the ledger lists, strict unless its gap lists it as timing dependent."""
     known = ledger()
     for item in items:
         if item.get_closest_marker("parity") is None:
             continue
-        entry = known.get(item_key(item))
+        key = item_key(item)
+        entry = known.get(key)
         if entry is None:
             continue
-        slug, _ = entry
+        slug, gap = entry
         kind = "deferred" if slug in DEFERRED else "gap"
-        item.add_marker(pytest.mark.xfail(strict=True, reason=f"parity {kind} {slug!r} (see parity_gaps.py)"))
+        strict = key not in gap.timing_dependent
+        item.add_marker(pytest.mark.xfail(strict=strict, reason=f"parity {kind} {slug!r} (see parity_gaps.py)"))
 
+
+_OPERAND_ORDER = frozenset(
+    {
+        "test_rm_parity_edges.py::test_cwd_and_dot_shapes[rm_cwd_abs_then_dot]",
+        "test_rm_parity_fs.py::test_recursion_and_order[duplicate_dir_operands_r]",
+        "test_rm_parity_fs.py::test_recursion_and_order[overlap_parent_then_child]",
+        "test_rm_parity_fs.py::test_recursion_and_order[rv_mixed_operands_fail]",
+    }
+)
 
 GAPS: dict[str, Gap] = {
-    "verbose": Gap(
-        reason=(
-            "-v prints every removed path on stdout: top-level operands exactly as typed ('./a', 'd//x', raw "
-            "control bytes, the spelling of the operand rather than the name on disk); in a walk the operand as "
-            "typed plus '/' plus the relative path ('d/' gives 'd//x'), files in readdir order, each directory "
-            "after its contents. Only cases whose -v output does not depend on the order of sibling subtrees are "
-            "listed here."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_cli.py::test_P_W_x[P_noop]",
-                "test_rm_parity_cli.py::test_P_W_x[P_v_file]",
-                "test_rm_parity_cli.py::test_P_W_x[rWv_file]",
-                "test_rm_parity_cli.py::test_P_W_x[x_file]",
-                "test_rm_parity_cli.py::test_directories[dir_no_r_v]",
-                "test_rm_parity_cli.py::test_directories[emptydir_dv]",
-                "test_rm_parity_cli.py::test_directories[rv_nested_operands_rev]",
-                "test_rm_parity_cli.py::test_directories[rv_symlink_to_dir]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[d_emptydir_trailing]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[dotfile_named_dotdot_prefix]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dir_trailing]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dotdir_name]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[r_dotdot_in_middle]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[slash_v]",
-                "test_rm_parity_cli.py::test_dot_and_slash_guards[v_dot_file]",
-                "test_rm_parity_cli.py::test_operands[v_duplicate_operand]",
-                "test_rm_parity_cli.py::test_operands[v_file]",
-                "test_rm_parity_cli.py::test_operands[v_files]",
-                "test_rm_parity_cli.py::test_operands[v_odd_names]",
-                "test_rm_parity_cli.py::test_operands[v_path_prefix]",
-                "test_rm_parity_cli.py::test_operands[v_repeated]",
-                "test_rm_parity_cli.py::test_override_prompts[ro_file_devnull_v]",
-                "test_rm_parity_cli.py::test_override_prompts[ro_file_r_pipe]",
-                "test_rm_parity_cli.py::test_override_prompts[ro_file_rf_pty]",
-                "test_rm_parity_edges.py::test_P_and_W[P_empty_file]",
-                "test_rm_parity_edges.py::test_P_and_W[P_fifo]",
-                "test_rm_parity_edges.py::test_P_and_W[P_hardlink]",
-                "test_rm_parity_edges.py::test_P_and_W[P_large_file]",
-                "test_rm_parity_edges.py::test_interactive_i[ro_file_in_tree_closed]",
-                "test_rm_parity_edges.py::test_symlinks_to_directories[d_symlink_to_dir]",
-                "test_rm_parity_edges.py::test_symlinks_to_directories[rd_symlink_to_dir_two_slashes]",
-                "test_rm_parity_fs.py::test_dot_operands[rm_dot_and_file]",
-                "test_rm_parity_fs.py::test_file_flags[symlink_to_uchg_file]",
-                "test_rm_parity_fs.py::test_file_flags[uchg_in_tree_rf]",
-                "test_rm_parity_fs.py::test_length_limits[name_255_ok]",
-                "test_rm_parity_fs.py::test_links_and_special_files[dangling_symlink]",
-                "test_rm_parity_fs.py::test_links_and_special_files[fifo]",
-                "test_rm_parity_fs.py::test_links_and_special_files[hardlink_in_tree]",
-                "test_rm_parity_fs.py::test_links_and_special_files[hardlinks]",
-                "test_rm_parity_fs.py::test_links_and_special_files[hardlinks_both]",
-                "test_rm_parity_fs.py::test_links_and_special_files[socket]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_inside_tree_r]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_loop]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_self_loop_r]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_through_operand]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_to_dir_r]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_to_dir_slash_d]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_to_dir_slash_r]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_to_dir_slash_rf_leaves_symlink]",
-                "test_rm_parity_fs.py::test_links_and_special_files[symlink_to_file]",
-                "test_rm_parity_fs.py::test_missing_and_directories[empty_dir_dv]",
-                "test_rm_parity_fs.py::test_missing_and_directories[missing_and_present_v]",
-                "test_rm_parity_fs.py::test_missing_and_directories[mixed_no_r_dir_and_files]",
-                "test_rm_parity_fs.py::test_names[case_insensitive_operand]",
-                "test_rm_parity_fs.py::test_names[dash_name_dot_slash]",
-                "test_rm_parity_fs.py::test_names[dash_name_double_dash]",
-                "test_rm_parity_fs.py::test_names[esc_name_v_stdout]",
-                "test_rm_parity_fs.py::test_names[name_nfc_created_nfd_operand]",
-                "test_rm_parity_fs.py::test_names[name_nfc_in_tree_v]",
-                "test_rm_parity_fs.py::test_names[name_nfd_created_nfc_operand]",
-                "test_rm_parity_fs.py::test_names[name_with_newline]",
-                "test_rm_parity_fs.py::test_names[name_with_space]",
-                "test_rm_parity_fs.py::test_names[single_dash_operand]",
-                "test_rm_parity_fs.py::test_path_shapes[absolute_path_v]",
-                "test_rm_parity_fs.py::test_path_shapes[dir_trailing_slash_r]",
-                "test_rm_parity_fs.py::test_path_shapes[dir_trailing_slashes_r]",
-                "test_rm_parity_fs.py::test_path_shapes[dot_component_path]",
-                "test_rm_parity_fs.py::test_path_shapes[dot_slash_prefix]",
-                "test_rm_parity_fs.py::test_path_shapes[dotdot_path]",
-                "test_rm_parity_fs.py::test_path_shapes[redundant_slashes_in_path]",
-                "test_rm_parity_fs.py::test_path_shapes[relative_and_absolute]",
-                "test_rm_parity_fs.py::test_path_shapes[rm_dotfile_not_dot]",
-                "test_rm_parity_fs.py::test_permissions[file_0000_devnull]",
-                "test_rm_parity_fs.py::test_permissions[file_0444_devnull]",
-                "test_rm_parity_fs.py::test_permissions[r_subdir_of_0555_parent]",
-                "test_rm_parity_fs.py::test_permissions[r_tree_with_0444_files_devnull]",
-                "test_rm_parity_fs.py::test_permissions[rfv_empty_subdir_0000]",
-                "test_rm_parity_fs.py::test_permissions[rv_subdir_0000]",
-                "test_rm_parity_fs.py::test_recursion_and_order[duplicate_operands]",
-                "test_rm_parity_fs.py::test_recursion_and_order[duplicate_operands_f]",
-                "test_rm_parity_fs.py::test_recursion_and_order[overlap_child_then_parent]",
-                "test_rm_parity_fs.py::test_recursion_and_order[rv_deep]",
-                "test_rm_parity_fs.py::test_recursion_and_order[rv_wide]",
-                "test_rm_parity_fs.py::test_stdin_kinds[stdin_closed_plain]",
-                "test_rm_parity_fs.py::test_stdin_kinds[stdin_pipe_plain]",
-                "test_rm_parity_fs.py::test_stdin_kinds[stdin_pty_plain]",
-            }
-        ),
-    ),
     "vis-escape": Gap(
         reason=(
             "Paths in error messages are escaped with vis(3) C style: C0 control bytes become \\a \\b \\v \\f \\r or "
@@ -227,17 +148,14 @@ GAPS: dict[str, Gap] = {
         reason=(
             "Operands are handled strictly in order: an operand, including a directory's whole walk, is finished "
             "before the next one is looked at, so later operands see earlier removals ('rm -rv d d' reports 'd: "
-            "No such file or directory') and output of different operands never interleaves. remmy stats every "
-            "operand first and then walks all directories together. Parallelism inside one walk is unaffected."
+            "No such file or directory') and output of different operands never interleaves. remmy walks a "
+            "directory operand while it goes on with the next operands and walks all directories together. "
+            "Parallelism inside one walk is unaffected. Until then the outcome of these cases depends on thread "
+            "timing (a walk runs while later operands are looked at, and may finish first), so they are all "
+            "timing dependent; the fix must delete them all, and with them this gap."
         ),
-        cases=frozenset(
-            {
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[rm_cwd_abs_then_dot]",
-                "test_rm_parity_fs.py::test_recursion_and_order[duplicate_dir_operands_r]",
-                "test_rm_parity_fs.py::test_recursion_and_order[overlap_parent_then_child]",
-                "test_rm_parity_fs.py::test_recursion_and_order[rv_mixed_operands_fail]",
-            }
-        ),
+        cases=_OPERAND_ORDER,
+        timing_dependent=_OPERAND_ORDER,
     ),
     "walk-semantics": Gap(
         reason=(
@@ -250,7 +168,6 @@ GAPS: dict[str, Gap] = {
         cases=frozenset(
             {
                 "test_rm_parity_edges.py::test_mount_operands[r_mountpoint_operand]",
-                "test_rm_parity_edges.py::test_mount_operands[rf_mountpoint_operand]",
                 "test_rm_parity_edges.py::test_mount_operands[rx_empty_nested_mount]",
                 "test_rm_parity_edges.py::test_symlinks_to_directories[r_symlink_to_dot_slash]",
                 "test_rm_parity_edges.py::test_symlinks_to_directories[r_symlink_to_dotdot_slash]",
@@ -488,50 +405,62 @@ GAPS: dict[str, Gap] = {
 }
 
 
+# Cases remmy runs: only the order of their lines differs, and by chance it can match rm's.
+_ORDERING_WALKED = frozenset(
+    {
+        "test_rm_parity_cli.py::test_P_W_x[P_r_tree]",
+        "test_rm_parity_cli.py::test_P_W_x[rWv_dir]",
+        "test_rm_parity_cli.py::test_directories[Rv_tree]",
+        "test_rm_parity_cli.py::test_directories[d_and_r_v]",
+        "test_rm_parity_cli.py::test_directories[rfv_missing]",
+        "test_rm_parity_cli.py::test_directories[rv_abs]",
+        "test_rm_parity_cli.py::test_directories[rv_all]",
+        "test_rm_parity_cli.py::test_directories[rv_dot_prefix]",
+        "test_rm_parity_cli.py::test_directories[rv_missing]",
+        "test_rm_parity_cli.py::test_directories[rv_nested_operands]",
+        "test_rm_parity_cli.py::test_directories[rv_symlink_to_dir_slash]",
+        "test_rm_parity_cli.py::test_directories[rv_trailing_slash]",
+        "test_rm_parity_cli.py::test_directories[rv_trailing_slashes]",
+        "test_rm_parity_cli.py::test_directories[rv_tree]",
+        "test_rm_parity_cli.py::test_directories[rv_two_trees]",
+        "test_rm_parity_cli.py::test_directories[v_separate_flags]",
+        "test_rm_parity_edges.py::test_cwd_and_dot_shapes[rm_cwd_ancestor_abs]",
+        "test_rm_parity_edges.py::test_cwd_and_dot_shapes[rm_cwd_then_relative]",
+        "test_rm_parity_edges.py::test_misc[rv_raw_names_in_tree]",
+        "test_rm_parity_fs.py::test_missing_and_directories[rdv_nested]",
+        "test_rm_parity_fs.py::test_recursion_and_order[fs_rv_tree]",
+    }
+)
+
+# Cases that use -i, -I or -x, which remmy refuses for now: they fail every time.
+_ORDERING_REFUSED = frozenset(
+    {
+        "test_rm_parity_cli.py::test_P_W_x[x_flag]",
+        "test_rm_parity_cli.py::test_interactive_i[ir_pty_all_y]",
+        "test_rm_parity_cli.py::test_interactive_i[ir_trailing_slash]",
+        "test_rm_parity_cli.py::test_interactive_i[ir_tree_all_y]",
+        "test_rm_parity_cli.py::test_interactive_i[ir_tree_examine_y_rest_n]",
+        "test_rm_parity_cli.py::test_interactive_i[ir_tree_keep_one_file]",
+        "test_rm_parity_cli.py::test_interactive_i[ir_tree_y_then_eof]",
+        "test_rm_parity_cli.py::test_interactive_i[ird_tree]",
+        "test_rm_parity_cli.py::test_interactive_i[irv_tree_all_y]",
+        "test_rm_parity_cli.py::test_prompt_once_I[I_and_i_r]",
+        "test_rm_parity_cli.py::test_prompt_once_I[I_r_5files_and_dir_y]",
+        "test_rm_parity_cli.py::test_prompt_once_I[I_r_dir_y]",
+        "test_rm_parity_edges.py::test_interactive_i[irv_special_files_in_tree]",
+    }
+)
+
 DEFERRED: dict[str, Gap] = {
     "ordering": Gap(
         reason=(
             "Out of scope: output whose order follows fts's depth-first post-order over readdir order, that is -v "
             "lines, -i prompts or errors of sibling entries where a subdirectory's output comes before a later "
-            "sibling's. remmy removes sibling subdirectories in parallel and keeps doing so."
+            "sibling's. remmy removes sibling subdirectories in parallel and keeps doing so. Its order there "
+            "depends on thread timing and matches rm's on some runs, so the cases remmy runs are timing "
+            "dependent; those with -i, -I or -x, which remmy still refuses, fail every time and stay strict."
         ),
-        cases=frozenset(
-            {
-                "test_rm_parity_cli.py::test_P_W_x[P_r_tree]",
-                "test_rm_parity_cli.py::test_P_W_x[rWv_dir]",
-                "test_rm_parity_cli.py::test_P_W_x[x_flag]",
-                "test_rm_parity_cli.py::test_directories[Rv_tree]",
-                "test_rm_parity_cli.py::test_directories[d_and_r_v]",
-                "test_rm_parity_cli.py::test_directories[rfv_missing]",
-                "test_rm_parity_cli.py::test_directories[rv_abs]",
-                "test_rm_parity_cli.py::test_directories[rv_all]",
-                "test_rm_parity_cli.py::test_directories[rv_dot_prefix]",
-                "test_rm_parity_cli.py::test_directories[rv_missing]",
-                "test_rm_parity_cli.py::test_directories[rv_nested_operands]",
-                "test_rm_parity_cli.py::test_directories[rv_symlink_to_dir_slash]",
-                "test_rm_parity_cli.py::test_directories[rv_trailing_slash]",
-                "test_rm_parity_cli.py::test_directories[rv_trailing_slashes]",
-                "test_rm_parity_cli.py::test_directories[rv_tree]",
-                "test_rm_parity_cli.py::test_directories[rv_two_trees]",
-                "test_rm_parity_cli.py::test_directories[v_separate_flags]",
-                "test_rm_parity_cli.py::test_interactive_i[ir_pty_all_y]",
-                "test_rm_parity_cli.py::test_interactive_i[ir_trailing_slash]",
-                "test_rm_parity_cli.py::test_interactive_i[ir_tree_all_y]",
-                "test_rm_parity_cli.py::test_interactive_i[ir_tree_examine_y_rest_n]",
-                "test_rm_parity_cli.py::test_interactive_i[ir_tree_keep_one_file]",
-                "test_rm_parity_cli.py::test_interactive_i[ir_tree_y_then_eof]",
-                "test_rm_parity_cli.py::test_interactive_i[ird_tree]",
-                "test_rm_parity_cli.py::test_interactive_i[irv_tree_all_y]",
-                "test_rm_parity_cli.py::test_prompt_once_I[I_and_i_r]",
-                "test_rm_parity_cli.py::test_prompt_once_I[I_r_5files_and_dir_y]",
-                "test_rm_parity_cli.py::test_prompt_once_I[I_r_dir_y]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[rm_cwd_ancestor_abs]",
-                "test_rm_parity_edges.py::test_cwd_and_dot_shapes[rm_cwd_then_relative]",
-                "test_rm_parity_edges.py::test_interactive_i[irv_special_files_in_tree]",
-                "test_rm_parity_edges.py::test_misc[rv_raw_names_in_tree]",
-                "test_rm_parity_fs.py::test_missing_and_directories[rdv_nested]",
-                "test_rm_parity_fs.py::test_recursion_and_order[fs_rv_tree]",
-            }
-        ),
+        cases=_ORDERING_WALKED | _ORDERING_REFUSED,
+        timing_dependent=_ORDERING_WALKED,
     ),
 }
