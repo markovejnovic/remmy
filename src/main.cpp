@@ -48,11 +48,13 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cutils/io/buffered_writer.hpp>
 #include <cutils/io/print.hpp>
@@ -94,6 +96,49 @@ static auto ThreadCount() -> std::uint16_t {
   return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
 }
 
+/// @brief The name rm's diagnostics start with: getprogname(3), which is the
+///        basename of the executed file (a symlink's own name), not argv[0].
+auto ProgramName() noexcept -> std::string_view {
+  const char* name = ::getprogname();
+  return name != nullptr ? name : "rm";
+}
+
+/// @brief strerror(3)'s text, held in a buffer of its own so that workers can
+///        report errors concurrently (strerror_r(3); an unknown number still
+///        gets rm's "Unknown error: N").
+class ErrorText {
+ public:
+  explicit ErrorText(int error) noexcept {
+    (void)::strerror_r(error, text_.data(), text_.size());
+  }
+
+  [[nodiscard]] auto View() const noexcept -> std::string_view {
+    return text_.data();
+  }
+
+ private:
+  static constexpr std::size_t kSize = 128;
+  std::array<char, kSize> text_{};
+};
+
+/// @brief Reports a failure the way BSD rm's warn(3) does:
+///        "<prog>: <path>: <strerror>", with `path` printed as given.
+auto ReportError(std::string_view path, int error) noexcept -> void {
+  const ErrorText text(error);
+  std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: {}",
+                                    ProgramName(), path, text.View());
+}
+
+/// @brief ReportError for the entry `name` of the directory at `dir`, which is
+///        the path fts(3) gives rm for it.
+auto ReportError(std::string_view dir, std::string_view name,
+                 int error) noexcept -> void {
+  const ErrorText text(error);
+  std::ignore =
+      cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}/{}: {}",
+                          ProgramName(), dir, name, text.View());
+}
+
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -130,10 +175,7 @@ class FileUnlinkWorker {
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
         failures_++;
-        std::ignore = cutils::io::PrintLn(
-            cutils::io::stderr_writer, "cannot open '{}': {}",
-            task->PathInto(path_buffer_),
-            std::strerror(static_cast<int>(err.code)));
+        ReportError(task->PathInto(path_buffer_), static_cast<int>(err.code));
         MaybeCleanupDirNode(task);
       }
 
@@ -153,10 +195,8 @@ class FileUnlinkWorker {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
         failures_++;
-        std::ignore = cutils::io::PrintLn(
-            cutils::io::stderr_writer, "cannot read '{}': {}",
-            task->PathInto(path_buffer_),
-            std::strerror(static_cast<int>(read.error())));
+        ReportError(task->PathInto(path_buffer_),
+                    static_cast<int>(read.error()));
         break;
       }
 
@@ -173,10 +213,7 @@ class FileUnlinkWorker {
                                 AT_SYMLINK_NOFOLLOW) != 0) {
           if (errno != ENOENT) {
             failures_++;
-            std::ignore = cutils::io::PrintLn(
-                cutils::io::stderr_writer, "cannot stat '{}/{}': {}",
-                task->PathInto(path_buffer_), entry.name(),
-                std::strerror(errno));
+            ReportError(task->PathInto(path_buffer_), entry.name(), errno);
           }
           continue;
         }
@@ -187,9 +224,7 @@ class FileUnlinkWorker {
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
             errno != ENOENT) {
           failures_++;
-          std::ignore = cutils::io::PrintLn(
-              cutils::io::stderr_writer, "cannot remove '{}/{}': {}",
-              task->PathInto(path_buffer_), entry.name(), std::strerror(errno));
+          ReportError(task->PathInto(path_buffer_), entry.name(), errno);
         }
         continue;
       }
@@ -204,10 +239,8 @@ class FileUnlinkWorker {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
           failures_++;
-          std::ignore = cutils::io::PrintLn(
-              cutils::io::stderr_writer, "cannot open '{}/{}': {}",
-              task->PathInto(path_buffer_), entry.name(),
-              std::strerror(static_cast<int>(opened.error().code)));
+          ReportError(task->PathInto(path_buffer_), entry.name(),
+                      static_cast<int>(opened.error().code));
           continue;
         }
       }
@@ -248,9 +281,7 @@ class FileUnlinkWorker {
 
       if (current->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT) {
         failures_++;
-        std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                          "cannot remove '{}': {}",
-                                          path_buffer_, std::strerror(errno));
+        ReportError(path_buffer_, errno);
       }
 
       delete current;
@@ -343,6 +374,22 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   }
 }
 
+/// @brief Whether BSD rm's -i would ask before removing any of these operands.
+///
+/// An effective -i (so not one a later -f overrode) asks before every removal,
+/// but rm reports an operand that is missing (lstat(2)), "." or "..", or a
+/// directory without -r, -R or -d straight away, without asking.
+auto InteractiveWouldAsk(std::span<char* const> operands,
+                         const remmy::Options& options) noexcept -> bool {
+  const bool removes_dirs = options.recursive || options.dir;
+  return std::ranges::any_of(operands, [removes_dirs](const char* path) {
+    struct stat path_stat;
+    return !IsDotOrDotDotOperand(path) &&
+           cutils::os::lstat(path, &path_stat) == 0 &&
+           (removes_dirs || !S_ISDIR(path_stat.st_mode));
+  });
+}
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -358,6 +405,15 @@ auto main(int argc, char** argv) -> int {
   const auto cli = args.TryParseOrAbort();
   if (!cli) {
     return cli.error();
+  }
+
+  if (cli->options.interactive &&
+      InteractiveWouldAsk(cli->operands, cli->options)) {
+    std::ignore =
+        cutils::io::PrintLn(cutils::io::stderr_writer,
+                            "{}: -i: not supported yet; nothing was removed",
+                            args.ProgramName());
+    return 1;
   }
 
   if (cli->options.prompt_once &&
@@ -380,27 +436,24 @@ auto main(int argc, char** argv) -> int {
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                        "cannot remove '{}': {}", path,
-                                        std::strerror(errno));
+      ReportError(path, errno);
       ++failures;
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                          "cannot remove '{}': {}", path,
-                                          std::strerror(errno));
+        ReportError(path, errno);
         ++failures;
       }
       continue;
     }
 
     if (!cli->options.recursive) {
+      // rm's own text, not strerror(EISDIR)'s "Is a directory".
       std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                        "cannot remove '{}': {}", path,
-                                        std::strerror(EISDIR));
+                                        "{}: {}: is a directory", ProgramName(),
+                                        path);
       ++failures;
       continue;
     }
@@ -408,9 +461,7 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      std::ignore = cutils::io::PrintLn(
-          cutils::io::stderr_writer, "cannot open '{}': {}", path,
-          std::strerror(static_cast<int>(dirfd.error().code)));
+      ReportError(path, static_cast<int>(dirfd.error().code));
       ++failures;
       continue;
     }

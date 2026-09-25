@@ -132,9 +132,6 @@ auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
     return std::unexpected(kExitUnsupported);
   };
 
-  if (cli.options.interactive) {
-    return refuse('i');
-  }
   if (cli.options.undelete && !cli.options.recursive) {
     return refuse('W');
   }
