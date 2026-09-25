@@ -55,6 +55,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
@@ -63,7 +64,6 @@
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
 #include <initializer_list>
-#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -91,6 +91,74 @@ static auto ThreadCount() -> std::uint16_t {
   return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
 }
 
+/// @brief Writes the pieces to stderr in one writev(2), ignoring failures.
+///
+/// Unlike std::print, this cannot throw (which under -fno-exceptions would
+/// abort) when stderr is closed or full: rm itself exits normally then.
+auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
+    -> void {
+  static constexpr std::size_t kMaxPieces = 8;
+  std::array<iovec, kMaxPieces> iov{};
+  std::size_t count = 0;
+  for (const std::string_view piece : pieces) {
+    if (count == iov.size()) {
+      break;
+    }
+    // writev only reads the buffers; iov_base is merely declared mutable.
+    iov[count++] = iovec{.iov_base = const_cast<char*>(piece.data()),
+                         .iov_len = piece.size()};
+  }
+  while (::writev(STDERR_FILENO, iov.data(), static_cast<int>(count)) < 0 &&
+         errno == EINTR) {
+  }
+}
+
+/// @brief The name rm's diagnostics start with: getprogname(3), which is the
+///        basename of the executed file (a symlink's own name), not argv[0].
+auto ProgramName() noexcept -> std::string_view {
+  const char* name = ::getprogname();
+  return name != nullptr ? name : "rm";
+}
+
+/// @brief strerror(3)'s text, held in a buffer of its own so that workers can
+///        report errors concurrently (strerror_r(3); an unknown number still
+///        gets rm's "Unknown error: N").
+class ErrorText {
+ public:
+  explicit ErrorText(int error) noexcept {
+    (void)::strerror_r(error, text_.data(), text_.size());
+  }
+
+  [[nodiscard]] auto View() const noexcept -> std::string_view {
+    return text_.data();
+  }
+
+ private:
+  static constexpr std::size_t kSize = 128;
+  std::array<char, kSize> text_{};
+};
+
+/// @brief Reports a failure the way BSD rm's warn(3) does:
+///        "<prog>: <path>: <strerror>", with `path` printed as given.
+auto ReportError(std::string_view path, int error) noexcept -> void {
+  const ErrorText text(error);
+  WriteStderr({ProgramName(), ": ", path, ": ", text.View(), "\n"});
+}
+
+/// @brief ReportError for the entry `name` of the directory at `dir`, which is
+///        the path fts(3) gives rm for it.
+auto ReportError(std::string_view dir, std::string_view name,
+                 int error) noexcept -> void {
+  const ErrorText text(error);
+  WriteStderr({ProgramName(), ": ", dir, "/", name, ": ", text.View(), "\n"});
+}
+
+/// @brief Whether a directory is gone after rmdir(2) (or unlinkat(2) with
+///        AT_REMOVEDIR) returned `status`: removed now or already missing.
+auto DirGone(int status) noexcept -> bool {
+  return status == 0 || errno == ENOENT;
+}
+
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -113,6 +181,10 @@ class FileUnlinkWorker {
   /// @brief The total number of failures that this worker encountered.
   std::size_t failures_ = 0;
 
+  /// @brief -f: like rm, try to rmdir a directory that cannot be opened (an
+  ///        unreadable one, fts's FTS_DNR) and say nothing when that works.
+  bool force_ = false;
+
   /// @brief The main entry-point the scheduler invokes for this task.
   ///
   /// This function is called by the scheduler periodically as new tasks are
@@ -126,11 +198,20 @@ class FileUnlinkWorker {
         // directory and retry it later.
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
-        failures_++;
-        std::println(stderr, "cannot open '{}': {}",
-                     task->PathInto(path_buffer_),
-                     std::strerror(static_cast<int>(err.code)));
-        MaybeCleanupDirNode(task);
+        // Like the inline openat failure in Scan: report the directory and
+        // leave it be (-f first tries rmdir, as rm does). It was never
+        // scanned, so nothing references it; only its parent's count of it
+        // is dropped.
+        const char* path = task->PathInto(path_buffer_);
+        if (!force_ || !DirGone(cutils::os::rmdir(path))) {
+          failures_++;
+          ReportError(path, static_cast<int>(err.code));
+        }
+        DirNode* parent = task->parent_;
+        delete task;
+        if (parent != nullptr) {
+          MaybeCleanupDirNode(parent);
+        }
       }
 
       return;
@@ -149,9 +230,8 @@ class FileUnlinkWorker {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
         failures_++;
-        std::println(stderr, "cannot read '{}': {}",
-                     task->PathInto(path_buffer_),
-                     std::strerror(static_cast<int>(read.error())));
+        ReportError(task->PathInto(path_buffer_),
+                    static_cast<int>(read.error()));
         break;
       }
 
@@ -168,9 +248,7 @@ class FileUnlinkWorker {
                                 AT_SYMLINK_NOFOLLOW) != 0) {
           if (errno != ENOENT) {
             failures_++;
-            std::println(stderr, "cannot stat '{}/{}': {}",
-                         task->PathInto(path_buffer_), entry.name(),
-                         std::strerror(errno));
+            ReportError(task->PathInto(path_buffer_), entry.name(), errno);
           }
           continue;
         }
@@ -181,9 +259,7 @@ class FileUnlinkWorker {
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
             errno != ENOENT) {
           failures_++;
-          std::println(stderr, "cannot remove '{}/{}': {}",
-                       task->PathInto(path_buffer_), entry.name(),
-                       std::strerror(errno));
+          ReportError(task->PathInto(path_buffer_), entry.name(), errno);
         }
         continue;
       }
@@ -197,10 +273,12 @@ class FileUnlinkWorker {
         if (opened) {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
-          failures_++;
-          std::println(stderr, "cannot open '{}/{}': {}",
-                       task->PathInto(path_buffer_), entry.name(),
-                       std::strerror(static_cast<int>(opened.error().code)));
+          if (!force_ || !DirGone(cutils::os::unlinkat(task->fd_, entry.c_str(),
+                                                       AT_REMOVEDIR))) {
+            failures_++;
+            ReportError(task->PathInto(path_buffer_), entry.name(),
+                        static_cast<int>(opened.error().code));
+          }
           continue;
         }
       }
@@ -242,8 +320,7 @@ class FileUnlinkWorker {
       const char* path = current->PathInto(path_buffer_);
       if (cutils::os::rmdir(path) != 0 && errno != ENOENT) {
         failures_++;
-        std::println(stderr, "cannot remove '{}': {}", path,
-                     std::strerror(errno));
+        ReportError(path, errno);
       }
 
       delete current;
@@ -265,28 +342,6 @@ constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
       slash == std::string_view::npos ? path : path.substr(slash + 1);
 
   return last == "." || last == "..";
-}
-
-/// @brief Writes the pieces to stderr in one writev(2), ignoring failures.
-///
-/// Unlike std::print, this cannot throw (which under -fno-exceptions would
-/// abort) when stderr is closed or full: rm itself exits normally then.
-auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
-    -> void {
-  static constexpr std::size_t kMaxPieces = 8;
-  std::array<iovec, kMaxPieces> iov{};
-  std::size_t count = 0;
-  for (const std::string_view piece : pieces) {
-    if (count == iov.size()) {
-      break;
-    }
-    // writev only reads the buffers; iov_base is merely declared mutable.
-    iov[count++] = iovec{.iov_base = const_cast<char*>(piece.data()),
-                         .iov_len = piece.size()};
-  }
-  while (::writev(STDERR_FILENO, iov.data(), static_cast<int>(count)) < 0 &&
-         errno == EINTR) {
-  }
 }
 
 /// @brief Prints BSD rm's answer to a rejected command line; returns 64.
@@ -327,6 +382,22 @@ auto PromptOnceWouldAsk(std::span<char* const> operands,
   return existing > kMaxSilentOperands;
 }
 
+/// @brief Whether BSD rm's -i would ask before removing any of these operands.
+///
+/// An effective -i (so not one a later -f overrode) asks before every removal,
+/// but rm reports an operand that is missing (lstat(2)), "." or "..", or a
+/// directory without -r, -R or -d straight away, without asking.
+auto InteractiveWouldAsk(std::span<char* const> operands,
+                         const remmy::Options& options) noexcept -> bool {
+  const bool removes_dirs = options.recursive || options.dir;
+  return std::ranges::any_of(operands, [removes_dirs](const char* path) {
+    struct stat path_stat;
+    return !IsDotOrDotDotOperand(path) &&
+           cutils::os::lstat(path, &path_stat) == 0 &&
+           (removes_dirs || !S_ISDIR(path_stat.st_mode));
+  });
+}
+
 /// @brief Refuses a command line remmy cannot yet honour safely; returns 1.
 ///
 /// Ignoring -i, -I, -W or -x would remove what rm would ask about or keep, so
@@ -360,6 +431,10 @@ auto main(int argc, char** argv) -> int {
         option != '\0') {
       return ReportUnsupported(argv0, option);
     }
+    if (cli->options.interactive &&
+        InteractiveWouldAsk(cli->operands, cli->options)) {
+      return ReportUnsupported(argv0, 'i');
+    }
     if (cli->options.prompt_once &&
         PromptOnceWouldAsk(cli->operands, cli->options.recursive)) {
       return ReportUnsupported(argv0, 'I');
@@ -367,37 +442,37 @@ auto main(int argc, char** argv) -> int {
   }
 
   const std::uint16_t threads = ThreadCount();
-  Scheduler scheduler(threads);
+  FileUnlinkWorker prototype;
+  prototype.force_ = cli->options.force;
+  Scheduler scheduler(threads, prototype);
 
   std::size_t failures = 0;
   for (const char* path : cli->operands) {
     if (IsDotOrDotDotOperand(path)) {
-      std::println(stderr,
-                   "cannot remove '{}': '.' and '..' may not be removed", path);
+      WriteStderr(
+          {"cannot remove '", path, "': '.' and '..' may not be removed\n"});
       ++failures;
       continue;
     }
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      std::println(stderr, "cannot remove '{}': {}", path,
-                   std::strerror(errno));
+      ReportError(path, errno);
       ++failures;
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        std::println(stderr, "cannot remove '{}': {}", path,
-                     std::strerror(errno));
+        ReportError(path, errno);
         ++failures;
       }
       continue;
     }
 
     if (!cli->options.recursive) {
-      std::println(stderr, "cannot remove '{}': {}", path,
-                   std::strerror(EISDIR));
+      // rm's own text, not strerror(EISDIR)'s "Is a directory".
+      WriteStderr({ProgramName(), ": ", path, ": is a directory\n"});
       ++failures;
       continue;
     }
@@ -405,9 +480,11 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      std::println(stderr, "cannot open '{}': {}", path,
-                   std::strerror(static_cast<int>(dirfd.error().code)));
-      ++failures;
+      // As in the walk: under -f, rm removes an unreadable empty directory.
+      if (!cli->options.force || !DirGone(cutils::os::rmdir(path))) {
+        ReportError(path, static_cast<int>(dirfd.error().code));
+        ++failures;
+      }
       continue;
     }
 

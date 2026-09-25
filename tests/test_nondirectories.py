@@ -167,7 +167,7 @@ def test_missing_operand_reports_enoent(run: Runner, workdir: Path) -> None:
     with check:
         assert len(res.errors) == 1
     with check:
-        assert "'ghost'" in res.stderr
+        assert ": ghost: " in res.stderr
     with check:
         assert os.strerror(errno.ENOENT) in res.stderr
 
@@ -184,12 +184,12 @@ def test_failures_do_not_stop_later_operands(run: Runner, workdir: Path) -> None
     msgs = "\n".join(res.errors)
     with check:
         assert len(res.errors) == 3, res
-    for n in ("'ghost1'", "'ghost2'", "'dir'"):
+    for n in (": ghost1: ", ": ghost2: ", ": dir: "):
         with check:
             assert n in msgs
     # Errors are reported in operand order.
     with check:
-        assert msgs.index("ghost1") < msgs.index("'dir'") < msgs.index("ghost2")
+        assert msgs.index(": ghost1: ") < msgs.index(": dir: ") < msgs.index(": ghost2: ")
 
 
 def test_same_file_twice_removes_once_and_reports_once(run: Runner, workdir: Path) -> None:
@@ -231,7 +231,7 @@ def test_file_in_unwritable_directory_is_reported(run: Runner, workdir: Path, is
     with check:
         assert res.returncode == 1, res
     with check:
-        assert "'locked/f'" in res.stderr
+        assert ": locked/f: " in res.stderr
     with check:
         assert os.strerror(errno.EACCES) in res.stderr
     with check:

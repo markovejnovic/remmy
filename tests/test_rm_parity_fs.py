@@ -233,6 +233,13 @@ PERMISSIONS = [
     Case("r_empty_subdir_0000", ["-rv", "d"], (Dir("d"), Dir("d/s", mode=0o000))),
     Case("r_operand_0000", ["-r", "d"], (Dir("d", mode=0o000), File("d/x", "x"))),
     Case("r_empty_operand_0000", ["-rv", "d"], (Dir("d", mode=0o000),)),
+    # -f still rmdirs a directory it cannot read, silently when that works.
+    Case("rf_empty_subdir_0000", ["-rf", "d"], (Dir("d"), Dir("d/s", mode=0o000))),
+    Case("rfv_empty_subdir_0000", ["-rfv", "d"], (Dir("d"), Dir("d/s", mode=0o000))),
+    Case("rf_empty_nested_0000", ["-rf", "d"], (Dir("d"), Dir("d/s"), Dir("d/s/t", mode=0o000))),
+    Case("rf_empty_operand_0000", ["-rf", "d"], (Dir("d", mode=0o000),)),
+    Case("rf_operand_0000", ["-rf", "d"], (Dir("d", mode=0o000), File("d/x", "x"))),
+    Case("rf_empty_subdir_0300", ["-rf", "d"], (Dir("d"), Dir("d/s", mode=0o300))),
     Case("r_subdir_0555", ["-r", "d"], (Dir("d"), Dir("d/s", mode=0o555), File("d/s/x", "x"), File("d/s/y", "x"))),
     Case("rf_subdir_0555", ["-rf", "d"], (Dir("d"), Dir("d/s", mode=0o555), File("d/s/x", "x"), File("d/s/y", "x"))),
     Case("r_subdir_0333", ["-rv", "d"], (Dir("d"), Dir("d/s", mode=0o333), File("d/s/x", "x"))),

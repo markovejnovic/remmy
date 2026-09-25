@@ -42,7 +42,7 @@ def test_unreadable_subdirectory(run: Runner, workdir: Path, threads: int) -> No
         assert os.strerror(errno.EACCES) in res.stderr
     # One complaint for the locked dir, one for its parent that could not be emptied.
     with check:
-        assert any("'t'" in e and os.strerror(errno.ENOTEMPTY) in e for e in res.errors), res
+        assert any(e.endswith(f": t: {os.strerror(errno.ENOTEMPTY)}") for e in res.errors), res
 
 
 def test_unwritable_subdirectory_keeps_its_files(run: Runner, workdir: Path, threads: int) -> None:
@@ -130,7 +130,7 @@ def test_unreadable_operand_itself(run: Runner, workdir: Path) -> None:
     with check:
         assert res.returncode == 1, res
     with check:
-        assert "'locked'" in res.stderr
+        assert ": locked: " in res.stderr
     with check:
         assert fstree.listing(workdir) == {"locked", "locked/x", "keep"}
 
@@ -165,3 +165,79 @@ def test_operand_under_unwritable_parent(run: Runner, workdir: Path) -> None:
         assert "p/t" in res.stderr
     with check:
         assert fstree.listing(workdir) == {"p", "p/t"}
+
+
+@pytest.mark.parametrize("contents", ["empty", "full"])
+def test_unreadable_subdirectory_opened_late_under_fd_pressure(
+    run: Runner, workdir: Path, threads: int, contents: str
+) -> None:
+    """A subdirectory parked for want of a descriptor and then refused is only reported.
+
+    Like rm, remmy names it once and leaves it (and so its parent) in place: it
+    must not rmdir it, which adds a 'Directory not empty' for it or, when it is
+    empty, removes it and its parent under plain -r.
+    """
+    n = 12
+    locked = {f"L{k}": ({"x": ""} if contents == "full" else {}) for k in range(n)}
+    fstree.build(workdir, {"t": {**{f"d{i}": {"e": {"f": ""}} for i in range(300)}, **locked}})
+    for k in range(n):
+        os.chmod(workdir / f"t/L{k}", 0o000)
+
+    res = run("-r", "t", threads=threads, fd_limit=16)
+
+    denied = os.strerror(errno.EACCES)
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert sorted(res.errors) == sorted(
+            [f"remmy: t/L{k}: {denied}" for k in range(n)] + [f"remmy: t: {os.strerror(errno.ENOTEMPTY)}"]
+        ), res
+    for k in range(n):
+        if fstree.exists(workdir / f"t/L{k}"):
+            os.chmod(workdir / f"t/L{k}", 0o700)
+    with check:
+        assert fstree.listing(workdir) == {"t"} | {f"t/{name}" for name in locked} | (
+            {f"t/L{k}/x" for k in range(n)} if contents == "full" else set()
+        )
+
+
+def test_force_removes_unreadable_empty_directories(run: Runner, workdir: Path, threads: int) -> None:
+    """Like rm -rf, which still rmdirs a directory it cannot read and says nothing when that works."""
+    fstree.build(workdir, {"t": {"sealed": {}, "deep": {"sealed": {}}, "x": ""}, "op": {}})
+    for p in ("t/sealed", "t/deep/sealed", "op"):
+        os.chmod(workdir / p, 0o000)
+
+    res = run("-rf", "t", "op", threads=threads)
+
+    with check:
+        assert (res.returncode, res.stderr) == (0, ""), res
+    with check:
+        assert fstree.listing(workdir) == set()
+
+
+@pytest.mark.parametrize("fd_limit", [None, 16])
+def test_force_keeps_unreadable_full_directories(
+    run: Runner, workdir: Path, threads: int, fd_limit: int | None
+) -> None:
+    """-f removes the unreadable empty ones, also opened late under fd pressure; full ones stay, reported once."""
+    n = 12
+    spec: fstree.Spec = {f"d{i}": {"e": {"f": ""}} for i in range(300)}
+    spec |= {f"E{k}": {} for k in range(n)} | {f"F{k}": {"x": ""} for k in range(n)}
+    fstree.build(workdir, {"t": spec})
+    for k in range(n):
+        os.chmod(workdir / f"t/E{k}", 0o000)
+        os.chmod(workdir / f"t/F{k}", 0o000)
+
+    res = run("-rf", "t", threads=threads, fd_limit=fd_limit)
+
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert sorted(res.errors) == sorted(
+            [f"remmy: t/F{k}: {os.strerror(errno.EACCES)}" for k in range(n)]
+            + [f"remmy: t: {os.strerror(errno.ENOTEMPTY)}"]
+        ), res
+    for k in range(n):
+        os.chmod(workdir / f"t/F{k}", 0o700)
+    with check:
+        assert fstree.listing(workdir) == {"t"} | {f"t/F{k}" for k in range(n)} | {f"t/F{k}/x" for k in range(n)}
