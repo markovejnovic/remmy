@@ -165,3 +165,37 @@ def test_operand_under_unwritable_parent(run: Runner, workdir: Path) -> None:
         assert "p/t" in res.stderr
     with check:
         assert fstree.listing(workdir) == {"p", "p/t"}
+
+
+@pytest.mark.parametrize("contents", ["empty", "full"])
+def test_unreadable_subdirectory_opened_late_under_fd_pressure(
+    run: Runner, workdir: Path, threads: int, contents: str
+) -> None:
+    """A subdirectory parked for want of a descriptor and then refused is only reported.
+
+    Like rm, remmy names it once and leaves it (and so its parent) in place: it
+    must not rmdir it, which adds a 'Directory not empty' for it or, when it is
+    empty, removes it and its parent under plain -r.
+    """
+    n = 12
+    locked = {f"L{k}": ({"x": ""} if contents == "full" else {}) for k in range(n)}
+    fstree.build(workdir, {"t": {**{f"d{i}": {"e": {"f": ""}} for i in range(300)}, **locked}})
+    for k in range(n):
+        os.chmod(workdir / f"t/L{k}", 0o000)
+
+    res = run("-r", "t", threads=threads, fd_limit=16)
+
+    denied = os.strerror(errno.EACCES)
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert sorted(res.errors) == sorted(
+            [f"remmy: t/L{k}: {denied}" for k in range(n)] + [f"remmy: t: {os.strerror(errno.ENOTEMPTY)}"]
+        ), res
+    for k in range(n):
+        if fstree.exists(workdir / f"t/L{k}"):
+            os.chmod(workdir / f"t/L{k}", 0o700)
+    with check:
+        assert fstree.listing(workdir) == {"t"} | {f"t/{name}" for name in locked} | (
+            {f"t/L{k}/x" for k in range(n)} if contents == "full" else set()
+        )

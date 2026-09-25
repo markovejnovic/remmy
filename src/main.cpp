@@ -189,9 +189,16 @@ class FileUnlinkWorker {
         // directory and retry it later.
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
+        // Like the inline openat failure in Scan: report the directory and
+        // leave it be. It was never scanned, so nothing references it and it
+        // must not be rmdir'd; only its parent's count of it is dropped.
         failures_++;
         ReportError(task->PathInto(path_buffer_), static_cast<int>(err.code));
-        MaybeCleanupDirNode(task);
+        DirNode* parent = task->parent_;
+        delete task;
+        if (parent != nullptr) {
+          MaybeCleanupDirNode(parent);
+        }
       }
 
       return;
