@@ -41,7 +41,7 @@ auto OpenLong(std::string_view path, int flags) noexcept
       return std::unexpected(cutils::os::OpenError{
           .code = std::errc::filename_too_long, .retryable = false});
     }
-    std::copy_n(path.data(), cut, piece.data());
+    std::copy_n(path.begin(), cut, piece.begin());
     piece[cut] = '\0';
     auto next = OpenAt(dir, piece.data(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (!next) {
@@ -49,12 +49,12 @@ auto OpenLong(std::string_view path, int flags) noexcept
     }
     dir = *std::move(next);
     // The rest is relative to `dir`, even after a doubled slash.
-    path = path.substr(cut);
+    path.remove_prefix(cut);
     while (!path.empty() && path.front() == '/') {
       path.remove_prefix(1);
     }
   }
-  std::copy_n(path.data(), path.size(), piece.data());
+  std::copy_n(path.begin(), path.size(), piece.begin());
   piece[path.size()] = '\0';
   return OpenAt(dir, piece.data(), flags);
 }
@@ -112,9 +112,10 @@ auto DirNode::Open(std::string& path_buf) noexcept
 }
 
 auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
-  const std::string_view path = PathInto(scratch);
+  const char* const c_path = PathInto(scratch);
+  const std::string_view path = scratch;
   if (path.size() < PATH_MAX) {
-    return cutils::os::rmdir(path.data());
+    return cutils::os::rmdir(c_path);
   }
 
   // Too long for rmdir: remove it relative to its parent instead.
@@ -123,13 +124,13 @@ auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
     errno = ENAMETOOLONG;
     return -1;
   }
-  const auto parent =
-      OpenLong(path.substr(0, slash), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  const auto parent = OpenLong(std::string_view{c_path, slash},
+                               O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (!parent) {
     errno = static_cast<int>(parent.error().code);
     return -1;
   }
-  return cutils::os::unlinkat(*parent, path.data() + slash + 1, AT_REMOVEDIR);
+  return cutils::os::unlinkat(*parent, c_path + slash + 1, AT_REMOVEDIR);
 }
 
 }  // namespace remmy
