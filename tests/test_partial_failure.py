@@ -42,7 +42,7 @@ def test_unreadable_subdirectory(run: Runner, workdir: Path, threads: int) -> No
         assert os.strerror(errno.EACCES) in res.stderr
     # One complaint for the locked dir, one for its parent that could not be emptied.
     with check:
-        assert any("'t'" in e and os.strerror(errno.ENOTEMPTY) in e for e in res.errors), res
+        assert any(e.endswith(f": t: {os.strerror(errno.ENOTEMPTY)}") for e in res.errors), res
 
 
 def test_unwritable_subdirectory_keeps_its_files(run: Runner, workdir: Path, threads: int) -> None:
@@ -130,7 +130,7 @@ def test_unreadable_operand_itself(run: Runner, workdir: Path) -> None:
     with check:
         assert res.returncode == 1, res
     with check:
-        assert "'locked'" in res.stderr
+        assert ": locked: " in res.stderr
     with check:
         assert fstree.listing(workdir) == {"locked", "locked/x", "keep"}
 
