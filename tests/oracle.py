@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,6 +12,10 @@ import fstree
 from harness import RUN_TIMEOUT, run_remmy
 
 RM = "/bin/rm"
+
+RM_REMOVES_UNREADABLE_EMPTY_DIRS = sys.platform == "linux"
+"""GNU rm rmdirs a directory it cannot read, so an empty one goes; remmy, like
+BSD rm, reports it. The oracle cannot judge remmy there."""
 
 Recipe = Callable[[Path], object]
 

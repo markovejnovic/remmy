@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import errno
 import os
-import sys
 from pathlib import Path
 
 import fstree
@@ -320,10 +319,6 @@ def test_failed_fallback_stat_is_reported(remmy_bin: Path, faultlib: Path, workd
 
 # --- Property: any single hard failure anywhere ------------------------------
 
-# Like GNU rm, remmy on Linux rmdirs a directory it cannot open, which removes
-# it if it is empty.
-RMDIR_AFTER_FAILED_OPEN = sys.platform == "linux"
-
 HARD_ERRNOS = st.sampled_from([errno.EIO, errno.EACCES, errno.EPERM, errno.EBUSY, errno.EROFS])
 FAULT_FNS = st.sampled_from(["openat", "unlinkat", "rmdir", "getdirentries"])
 
@@ -384,11 +379,6 @@ def test_any_single_failure_is_contained_and_reported(
         assume(rel == "t" or rel.startswith("t/"))  # ignore libc-internal calls
         event(f"failed: {fn}")
         target(float(rel.count("/")), label="depth of injected failure")
-
-        if RMDIR_AFTER_FAILED_OPEN and fn == "openat" and not fstree.exists(inj.path):
-            assert (res.returncode, res.stderr) == (0, ""), res
-            assert not fstree.exists(d / "t")
-            return
 
         survivors = fstree.listing(d)
         assert res.returncode == 1, res

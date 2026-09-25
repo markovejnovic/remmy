@@ -27,8 +27,6 @@ struct HelpFirst {
   [[= cpplap::Short("-r")]] bool recursive = false;
 };
 
-// A functor, not decltype(&std::fclose): glibc's attributes on fclose would be
-// dropped from the template argument, which GCC warns about.
 struct CloseFile {
   void operator()(std::FILE* file) const noexcept { (void)std::fclose(file); }
 };
