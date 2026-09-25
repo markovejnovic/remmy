@@ -109,6 +109,13 @@ auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
                           name, cutils::os::StrError(error));
 }
 
+/// @brief Whether an operand's failure is one to report: -f silences a missing
+///        operand (ENOENT, which also covers "" and paths through missing
+///        directories) and nothing else, as BSD rm does.
+auto Reportable(bool force, int error) noexcept -> bool {
+  return !force || error != ENOENT;
+}
+
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -372,6 +379,19 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   }
 }
 
+/// @brief Whether BSD rm's -x (with -r or -R) could keep anything of these
+///        operands: only a walk crosses devices, so only when one of them is
+///        a directory (lstat(2)) that rm would walk, not "." or "..".
+auto OneFileSystemWouldMatter(std::span<char* const> operands) noexcept
+    -> bool {
+  return std::ranges::any_of(operands, [](const char* path) {
+    struct stat path_stat;
+    return !IsDotOrDotDotOperand(path) &&
+           cutils::os::lstat(path, &path_stat) == 0 &&
+           S_ISDIR(path_stat.st_mode);
+  });
+}
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -388,11 +408,20 @@ auto main(int argc, char** argv) -> int {
     return cli.error();
   }
 
+  if (cli->Options().one_file_system && cli->Options().recursive &&
+      OneFileSystemWouldMatter(cli->Operands())) {
+    std::ignore = cutils::io::PrintLn(
+        cutils::io::stderr_writer,
+        "{}: -x: not supported yet; nothing was removed", cli->ProgramName());
+    return 1;
+  }
+
   if (cli->Options().prompt_once &&
       !ConfirmPromptOnce(cli->Operands(), cli->Options().recursive)) {
     return 1;
   }
 
+  const bool force = cli->Options().force;
   const std::uint16_t threads = ThreadCount();
   const std::string_view prog = cli->ExecutableName();
   const FileUnlinkWorker prototype(*cli);
@@ -410,15 +439,19 @@ auto main(int argc, char** argv) -> int {
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      WarnAt(prog, path, errno);
-      ++failures;
+      if (const int error = errno; Reportable(force, error)) {
+        WarnAt(prog, path, error);
+        ++failures;
+      }
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        WarnAt(prog, path, errno);
-        ++failures;
+        if (const int error = errno; Reportable(force, error)) {
+          WarnAt(prog, path, error);
+          ++failures;
+        }
       }
       continue;
     }
@@ -433,8 +466,7 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      if (!cli->Options().force ||
-          (cutils::os::rmdir(path) != 0 && errno != ENOENT)) {
+      if (!force || (cutils::os::rmdir(path) != 0 && errno != ENOENT)) {
         WarnAt(prog, path, static_cast<int>(dirfd.error().code));
         ++failures;
       }
