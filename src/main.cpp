@@ -73,6 +73,7 @@
 #include <thread>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "cli.hpp"
 #include "dir_node.hpp"
@@ -327,14 +328,65 @@ constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
   return last == "." || last == "..";
 }
 
+/// @brief The operands left once BSD rm's guards have dropped theirs.
+struct GuardedOperands {
+  std::vector<const char*> kept;
+  /// @brief Whether a guard dropped an operand, which makes rm exit 1.
+  bool refused = false;
+};
+
+/// @brief BSD rm's checkdot(), then its checkslash().
+///
+/// Before anything is removed, rm drops every operand whose last component is
+/// "." or "..", then every operand that is exactly "/" ("//" is an ordinary
+/// directory), and says so once per guard for the whole command line, dot
+/// first, whatever the options (-f included). The rest keep their order.
+auto ApplyGuards(std::string_view prog,
+                 std::span<const char* const> operands) noexcept
+    -> GuardedOperands {
+  GuardedOperands out;
+  out.kept.reserve(operands.size());
+  bool dot = false;
+  bool slash = false;
+  for (const char* path : operands) {
+    if (IsDotOrDotDotOperand(path)) {
+      dot = true;
+    } else if (std::string_view(path) == "/") {
+      slash = true;
+    } else {
+      out.kept.push_back(path);
+    }
+  }
+
+  if (dot) {
+    std::ignore =
+        cutils::io::PrintLn(cutils::io::stderr_writer,
+                            "{}: \".\" and \"..\" may not be removed", prog);
+  }
+  if (slash) {
+    std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
+                                      "{}: \"/\" may not be removed", prog);
+  }
+  out.refused = dot || slash;
+  return out;
+}
+
+/// @brief Whether rm runs as unlink(1): argv[0]'s last component, as given
+///        (not getprogname(3)), is "unlink".
+constexpr auto IsUnlinkMode(std::string_view argv0) noexcept -> bool {
+  const std::size_t slash = argv0.rfind('/');
+  return (slash == std::string_view::npos ? argv0 : argv0.substr(slash + 1)) ==
+         "unlink";
+}
+
 /// @brief Asks BSD rm's -I question when it would; true to go ahead.
 ///
-/// rm asks once when, among the operands that exist (lstat(2)) and are not
-/// "." or "..", there is a directory under -r or -R, or more than three in
-/// all. Only the first character of each answer line counts; anything but y
-/// or n asks again, and end of input declines.
-auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
-    -> bool {
+/// rm asks once when, among the operands that exist (lstat(2)) and passed
+/// its guards (see ApplyGuards), there is a directory under -r or -R, or more
+/// than three in all. Only the first character of each answer line counts;
+/// anything but y or n asks again, and end of input declines.
+auto ConfirmPromptOnce(std::span<const char* const> operands,
+                       bool recursive) noexcept -> bool {
   static constexpr std::size_t kMaxSilentOperands = 3;
   static constexpr std::size_t kPromptBuffer = 256;
   auto& in = cutils::io::stdin_reader;
@@ -344,8 +396,7 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   std::string_view dir_name;
   for (const char* path : operands) {
     struct stat path_stat;
-    if (IsDotOrDotDotOperand(path) ||
-        cutils::os::lstat(path, &path_stat) != 0) {
+    if (cutils::os::lstat(path, &path_stat) != 0) {
       continue;
     }
     if (S_ISDIR(path_stat.st_mode)) {
@@ -398,13 +449,13 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
 
 /// @brief Whether BSD rm's -x (with -r or -R) could keep anything of these
 ///        operands: only a walk crosses devices, so only when one of them is
-///        a directory (lstat(2)) that rm would walk, not "." or "..".
-auto OneFileSystemWouldMatter(std::span<char* const> operands) noexcept
+///        a directory (lstat(2)) that rm would walk. The operands have passed
+///        rm's guards (see ApplyGuards).
+auto OneFileSystemWouldMatter(std::span<const char* const> operands) noexcept
     -> bool {
   return std::ranges::any_of(operands, [](const char* path) {
     struct stat path_stat;
-    return !IsDotOrDotDotOperand(path) &&
-           cutils::os::lstat(path, &path_stat) == 0 &&
+    return cutils::os::lstat(path, &path_stat) == 0 &&
            S_ISDIR(path_stat.st_mode);
   });
 }
@@ -425,8 +476,17 @@ auto main(int argc, char** argv) -> int {
     return cli.error();
   }
 
+  const std::string_view prog = cli->ExecutableName();
+  // Called as unlink(1), rm has no guards: "." and "/" are directories there.
+  const GuardedOperands guarded =
+      IsUnlinkMode(cli->ProgramName())
+          ? GuardedOperands{.kept = {cli->Operands().begin(),
+                                     cli->Operands().end()}}
+          : ApplyGuards(prog, cli->Operands());
+  const std::span<const char* const> operands(guarded.kept);
+
   if (cli->Options().one_file_system && cli->Options().recursive &&
-      OneFileSystemWouldMatter(cli->Operands())) {
+      OneFileSystemWouldMatter(operands)) {
     std::ignore = cutils::io::PrintLn(
         cutils::io::stderr_writer,
         "{}: -x: not supported yet; nothing was removed", cli->ProgramName());
@@ -434,26 +494,17 @@ auto main(int argc, char** argv) -> int {
   }
 
   if (cli->Options().prompt_once &&
-      !ConfirmPromptOnce(cli->Operands(), cli->Options().recursive)) {
+      !ConfirmPromptOnce(operands, cli->Options().recursive)) {
     return 1;
   }
 
   const bool force = cli->Options().force;
   const std::uint16_t threads = ThreadCount();
-  const std::string_view prog = cli->ExecutableName();
   const FileUnlinkWorker prototype(*cli);
   Scheduler scheduler(threads, prototype);
 
-  std::size_t failures = 0;
-  for (const char* path : cli->Operands()) {
-    if (IsDotOrDotDotOperand(path)) {
-      std::ignore = cutils::io::PrintLn(
-          cutils::io::stderr_writer,
-          "cannot remove '{}': '.' and '..' may not be removed", path);
-      ++failures;
-      continue;
-    }
-
+  std::size_t failures = guarded.refused ? 1 : 0;
+  for (const char* path : operands) {
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
       if (const int error = errno;
