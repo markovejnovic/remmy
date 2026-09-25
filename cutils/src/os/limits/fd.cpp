@@ -38,7 +38,7 @@ class AtomicLeases {
   }
 
  private:
-  static constexpr int kEpochShift = 32;
+  static constexpr unsigned kEpochShift = 32;
   static constexpr std::uint64_t kAcquire = 1;
   static constexpr std::uint64_t kRelease =
       (std::uint64_t{1} << kEpochShift) - kAcquire;
