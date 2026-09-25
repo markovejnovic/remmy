@@ -72,8 +72,9 @@ def _probe(root: Path) -> tuple[FsCaps, bool, bool]:
             (p / "x:y").write_text("")
         except OSError:
             dos = True
-        nfd = not _round_trips(p / "names")
-        caps = FsCaps(symlinks=symlinks, fifos=fifos, dos_names=dos, nfd_names=nfd)
+        nfd = not _round_trips(p / "names", _NON_NFD_NAMES)
+        lossy = not _round_trips(p / "lossy", _LOSSY_NAMES)
+        caps = FsCaps(symlinks=symlinks, fifos=fifos, dos_names=dos, nfd_names=nfd, lossy_names=lossy)
         return caps, case_sensitive, permissions
     finally:
         shutil.rmtree(p, ignore_errors=True)
@@ -83,21 +84,32 @@ def _probe(root: Path) -> tuple[FsCaps, bool, bool]:
 # decomposition NFC never recombines (Unicode composition exclusion).
 _NON_NFD_NAMES = ("\u00e9", "\u0a59", "\u2126")
 
+# NFD names both the exFAT and FAT drivers still mangle: one from the Services
+# for Macintosh range, and a solidus overlay (see strategies._LOSSY_SINGLES).
+_LOSSY_NAMES = ("\uf02a", "<\u0338")
 
-def _round_trips(probe: Path) -> bool:
-    """Whether every name the volume lists back can be unlinked by that name.
 
-    macOS's exFAT and FAT drivers list some non-NFD names in a different form
-    than they were created with and then fail to unlink the listed form.
+def _round_trips(probe: Path, names: tuple[str, ...]) -> bool:
+    """Whether every one of ``names`` can be created, then unlinked by the name it lists back as.
+
+    macOS's exFAT and FAT drivers list some names in a different form than they
+    were created with and then fail to unlink the listed form; FAT refuses to
+    create some of them at all.
     """
     probe.mkdir()
-    for name in _NON_NFD_NAMES:
-        (probe / name).write_text("")
     ok = True
+    for name in names:
+        try:
+            (probe / name).write_text("")
+        except OSError:
+            ok = False
     for listed in os.listdir(probe):
         try:
+            # A name listed back as "" would unlink the probe directory itself.
+            if not listed:
+                raise IsADirectoryError(probe)
             os.unlink(probe / listed)
-        except FileNotFoundError:
+        except OSError:
             ok = False
     return ok
 
