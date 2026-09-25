@@ -545,6 +545,17 @@ auto main(int argc, char** argv) -> int {
     }
 
     if (!cli->Options().recursive) {
+      if (cli->Options().dir) {
+        // -d: rmdir(2) the operand as given, so "l/" removes the link's
+        // target and "//" fails with EISDIR, and report errno like unlink.
+        if (cutils::os::rmdir(path) != 0) {
+          if (const int error = errno; Reportable(force, error)) {
+            WarnAt(prog, path, error);
+            ++failures;
+          }
+        }
+        continue;
+      }
       std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
                                         "{}: {}: is a directory", prog, path);
       ++failures;
