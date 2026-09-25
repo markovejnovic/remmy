@@ -64,7 +64,6 @@
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
 #include <initializer_list>
-#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -431,8 +430,8 @@ auto main(int argc, char** argv) -> int {
   std::size_t failures = 0;
   for (const char* path : cli->operands) {
     if (IsDotOrDotDotOperand(path)) {
-      std::println(stderr,
-                   "cannot remove '{}': '.' and '..' may not be removed", path);
+      WriteStderr(
+          {"cannot remove '", path, "': '.' and '..' may not be removed\n"});
       ++failures;
       continue;
     }
