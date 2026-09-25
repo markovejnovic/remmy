@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from collections import defaultdict
 from pathlib import Path
 
@@ -49,7 +50,7 @@ def _median_times(run: Run, cells: list[Cell], fixture: str, cache: str) -> plt.
     fig, ax = plt.subplots(figsize=(8, 0.5 * len(cells) + 1.5))
     ax.barh([_label(run, c) for c in cells], ms, xerr=err, capsize=3)
     ax.set_xlabel("median time to delete (ms, 95% CI)")
-    ax.set_title(f"{run.plan.fixture(fixture).title} tree ({fixture}), {cache} cache")
+    ax.set_title(f"{run.plan.fixture(fixture).title}, {cache} cache")
     ax.grid(axis="x", alpha=0.3)
     return fig
 
@@ -78,7 +79,7 @@ def _scaling(run: Run, cells: list[Cell], fixture: str, cache: str) -> plt.Figur
     ax.set_ylim(bottom=0)
     ax.set_xlabel("threads")
     ax.set_ylabel("files deleted per second")
-    ax.set_title(f"Throughput by threads: {run.plan.fixture(fixture).title} tree ({fixture}), {cache} cache")
+    ax.set_title(f"Throughput by threads: {run.plan.fixture(fixture).title}, {cache} cache")
     ax.legend()
     ax.grid(alpha=0.3)
     return fig
@@ -100,9 +101,12 @@ def _speedup_by_fixture(run: Run, summary: Summary) -> plt.Figure:
         xs = [j + i * width for j, f in enumerate(fixtures) if f in by_fixture]
         ax.bar(xs, [by_fixture[f] for f in fixtures if f in by_fixture], width, label=label)
     ax.axhline(1, color="black", linewidth=0.8)
-    ax.set_xticks([j + width * (len(tools) - 1) / 2 for j in range(len(fixtures))], fixtures)
+    ax.set_xticks(
+        [j + width * (len(tools) - 1) / 2 for j in range(len(fixtures))],
+        [textwrap.fill(run.plan.fixture(f).title, 12) for f in fixtures],
+    )
     ax.set_ylabel(f"speedup vs {run.plan.reference} (median time ratio)")
     ax.set_title(f"Speedup vs {run.plan.reference} by tree, warm cache (parallel tools at {default} threads)")
-    ax.legend()
+    ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
     ax.grid(axis="y", alpha=0.3)
     return fig
