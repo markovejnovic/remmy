@@ -63,7 +63,7 @@ if(BUILD_TESTING)
     if(REMMY_UV)
       add_test(NAME e2e
         COMMAND "${REMMY_UV}" run --project "${CMAKE_CURRENT_SOURCE_DIR}"
-          pytest "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p no:cacheprovider -n auto
+          pytest "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p no:cacheprovider -n auto --dist worksteal
           --remmy "$<TARGET_FILE:remmy>"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     else()
