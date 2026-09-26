@@ -45,11 +45,50 @@ import pytest
 RM = Path("/bin/rm")
 
 NOT_YET_AT_PARITY = pytest.mark.xfail(
-    strict=False,
-    reason="remmy does not yet match /bin/rm byte for byte; drop this marker once it does",
+    strict=True,
+    reason="remmy does not yet match /bin/rm byte for byte; add the case to AT_PARITY once it does",
 )
-"""Applied to every parity module. Not strict: some cases already pass, and the
-report still lists each mismatch as an xfail."""
+"""Applied by ``conftest`` to every ``parity`` case missing from :data:`AT_PARITY`.
+Strict, so a case that starts passing fails (XPASS) until it is listed."""
+
+AT_PARITY = frozenset(
+    (
+        "test_rm_parity_cli.py::test_directories[r_tree]",
+        "test_rm_parity_cli.py::test_invocation_names[unlink_bin_direct]",
+        "test_rm_parity_cli.py::test_invocation_names[unlink_dash]",
+        "test_rm_parity_cli.py::test_invocation_names[unlink_dashdash]",
+        "test_rm_parity_cli.py::test_invocation_names[unlink_mode_dashdash_dashdash]",
+        "test_rm_parity_cli.py::test_invocation_names[unlink_one]",
+        "test_rm_parity_cli.py::test_invocation_names[unlink_readonly_pty]",
+        "test_rm_parity_cli.py::test_invocation_names[unlink_symlink]",
+        "test_rm_parity_cli.py::test_legacy_command_mode[legacy_ro_devnull]",
+        "test_rm_parity_cli.py::test_operands[dash_operand_alone_present]",
+        "test_rm_parity_cli.py::test_operands[dash_operand_present]",
+        "test_rm_parity_cli.py::test_operands[dashfile_via_dashdash]",
+        "test_rm_parity_cli.py::test_operands[file_plain]",
+        "test_rm_parity_cli.py::test_override_prompts[ro_file_devnull]",
+        "test_rm_parity_cli.py::test_override_prompts[ro_file_pipe]",
+        "test_rm_parity_cli.py::test_override_prompts[ro_symlink_pty]",
+        "test_rm_parity_cli.py::test_override_prompts[wo_file_pty]",
+        "test_rm_parity_cli.py::test_usage_and_getopt[dashdash_twice]",
+        "test_rm_parity_edges.py::test_unlink_mode[unlink_dangling_symlink]",
+        "test_rm_parity_edges.py::test_unlink_mode[unlink_fifo]",
+        "test_rm_parity_edges.py::test_unlink_mode[unlink_ro_devnull]",
+        "test_rm_parity_edges.py::test_unlink_mode[unlink_ro_pty_y]",
+        "test_rm_parity_edges.py::test_unlink_mode[unlink_symlink_to_dir]",
+        "test_rm_parity_fs.py::test_invocation_names[argv0_path_to_unlink_name]",
+        "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_dd]",
+        "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink]",
+        "test_rm_parity_fs.py::test_links_and_special_files[fifo_socket_in_tree]",
+        "test_rm_parity_fs.py::test_links_and_special_files[symlink_to_dir]",
+        "test_rm_parity_fs.py::test_permissions[file_0444_closed_stdin]",
+        "test_rm_parity_fs.py::test_permissions[file_0444_pipe]",
+        "test_rm_parity_fs.py::test_permissions[symlink_to_0444_pty]",
+        "test_rm_parity_fs.py::test_recursion_and_order[r_tree_quiet]",
+    )
+)
+"""Parity cases remmy already passes, as ``<module file>::<test id>``. A listed
+case that regresses fails outright; list a case when remmy starts to pass it."""
 PROGS = ("rm", "unlink", "remmy")
 """Names of the symlinks a case may execute; each points at the program under test."""
 

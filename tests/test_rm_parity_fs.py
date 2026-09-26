@@ -28,7 +28,6 @@ import pytest
 from parity import (
     CLOSED,
     FULL_PATH,
-    NOT_YET_AT_PARITY,
     Case,
     DeepChain,
     Dir,
@@ -46,7 +45,6 @@ from parity import (
 
 pytestmark = [
     pytest.mark.parity,
-    NOT_YET_AT_PARITY,
     pytest.mark.skipif(sys.platform != "darwin", reason="BSD rm parity is macOS-only"),
 ]
 
