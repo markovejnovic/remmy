@@ -89,6 +89,8 @@ FIXTURES = (
     Fixture(id="F4", title="Large files (1 MiB)", depth=2, fanout=6, files=45, size=1 << 20),
     Fixture(id="F5", title="Tiny tree", depth=1, fanout=4, files=25),
     Fixture(id="F6", title="Huge tree", depth=3, fanout=10, files=300),
+    # F0's file count in one directory: a single scan task, no subdirs to spread.
+    Fixture(id="F7", title="Flat directory", depth=0, fanout=0, files=58_500),
 )
 
 RULE = DecisionRule(margin=0.05, cliff_threshold=0.33, alpha=0.05)
