@@ -323,6 +323,15 @@ auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
                                     cutils::os::StrError(error));
 }
 
+/// @brief Refuses a directory operand removed without -r, -R or -d, in rm's
+///        own words, not strerror(EISDIR)'s "Is a directory".
+auto ReportIsDirectory(std::string_view prog, std::string_view path) noexcept
+    -> void {
+  const EscapedPath shown(path);
+  std::ignore = cutils::io::PrintLn(
+      cutils::io::stderr_writer, "{}: {}: is a directory", prog, shown.View());
+}
+
 /// @brief Whether an operand's failure is one to report: -f silences a missing
 ///        operand (ENOENT, which also covers "" and paths through missing
 ///        directories) and nothing else, as BSD rm does, except that with -r
@@ -635,21 +644,21 @@ constexpr auto IsUnlinkMode(std::string_view argv0) noexcept -> bool {
          "unlink";
 }
 
-/// @brief Whether BSD rm skips its guards for this command line.
+/// @brief The one operand of an unlink(1) command line, or nullptr when it is
+///        a usage error.
 ///
-/// Only unlink(1)'s one accepted shape, `unlink file` or `unlink -- file`,
-/// goes straight to unlink(2) without them; there "." and "/" are directories
-/// like any other. Every other unlink-mode command line is a usage error to
-/// rm and removes nothing, so until remmy reports those the same way, it keeps
-/// the guards for them: an option such as -r must never walk ".", ".." or "/".
-constexpr auto SkipsGuards(std::string_view argv0, std::span<char* const> args,
-                           std::size_t operand_count) noexcept -> bool {
-  if (!IsUnlinkMode(argv0) || operand_count != 1) {
-    return false;
+/// unlink(1) parses no options: it takes exactly one operand, which a single
+/// leading "--" may precede. So "-f" alone is a file's name, "--" alone is one
+/// too, and "-f file" or "a b" are usage errors.
+constexpr auto UnlinkOperand(std::span<char* const> args) noexcept -> const
+    char* {
+  if (args.size() == 1) {
+    return args.front();
   }
-  // args excludes argv[0]: exactly the operand, or "--" and the operand.
-  return args.size() == 1 ||
-         (args.size() == 2 && std::string_view(args.front()) == "--");
+  if (args.size() == 2 && std::string_view(args.front()) == "--") {
+    return args.back();
+  }
+  return nullptr;
 }
 
 /// @brief Asks BSD rm's -I question when it would; true to go ahead.
@@ -733,6 +742,35 @@ auto OneFileSystemWouldMatter(std::span<const char* const> operands) noexcept
   });
 }
 
+/// @brief BSD rm run as unlink(1) (see IsUnlinkMode); returns the exit status.
+///
+/// The operand goes straight to unlink(2), as rm's rm_file() hands it on
+/// without -d, -f, -i or -v: no dot or slash guard, no prompt, and a directory
+/// ("." ".." and "/" included) is refused with rm's "is a directory".
+auto RunUnlink(const remmy::Argv& args) noexcept -> int {
+  const char* path = UnlinkOperand(args.ArgsSpan());
+  if (path == nullptr) {
+    args.ReportUsage(remmy::UsageError::Unknown());
+    return remmy::kExitUsage;
+  }
+
+  const std::string_view prog = args.ExecutableName();
+  struct stat path_stat;
+  if (cutils::os::lstat(path, &path_stat) != 0) {
+    WarnAt(prog, path, errno);
+    return 1;
+  }
+  if (S_ISDIR(path_stat.st_mode)) {
+    ReportIsDirectory(prog, path);
+    return 1;
+  }
+  if (cutils::os::unlink(path) != 0) {
+    WarnAt(prog, path, errno);
+    return 1;
+  }
+  return 0;
+}
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -744,20 +782,16 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
 }  // namespace
 
 auto main(int argc, char** argv) -> int {
-  const std::span<char* const> args(
-      argv, static_cast<std::size_t>(argc > 0 ? argc : 0));
-  const auto rest = args.empty() ? args : args.subspan(1);
+  if (const remmy::Argv args{argc, argv}; IsUnlinkMode(args.ProgramName())) {
+    return RunUnlink(args);
+  }
   const auto cli = remmy::Argv{argc, argv}.TryParseOrAbort();
   if (!cli) {
     return cli.error();
   }
 
   const std::string_view prog = cli->ExecutableName();
-  const GuardedOperands guarded =
-      SkipsGuards(cli->ProgramName(), rest, cli->Operands().size())
-          ? GuardedOperands{.kept = {cli->Operands().begin(),
-                                     cli->Operands().end()}}
-          : ApplyGuards(prog, cli->Operands());
+  const GuardedOperands guarded = ApplyGuards(prog, cli->Operands());
   const std::span<const char* const> operands(guarded.kept);
 
   if (cli->Options().one_file_system && cli->Options().recursive &&
@@ -826,10 +860,7 @@ auto main(int argc, char** argv) -> int {
         }
         continue;
       }
-      const EscapedPath shown(path);
-      std::ignore =
-          cutils::io::PrintLn(cutils::io::stderr_writer,
-                              "{}: {}: is a directory", prog, shown.View());
+      ReportIsDirectory(prog, path);
       ++failures;
       continue;
     }

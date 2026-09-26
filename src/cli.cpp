@@ -55,9 +55,6 @@ constexpr auto ApplyOption(Options& options, char letter) noexcept -> bool {
   }
 }
 
-/// @brief The error code to throw in case of a bad arg parsing.
-constexpr int kExitUsage = 64;
-
 constexpr int kExitUnsupported = 1;
 
 /// @brief The usage message to print in case of bad arg parsing.

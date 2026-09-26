@@ -17,6 +17,9 @@ static constexpr const char* kDefaultProgramName = "rm";
 
 }  // namespace detail
 
+/// @brief The error code to throw in case of a bad arg parsing.
+inline constexpr int kExitUsage = 64;
+
 /// @brief The options of BSD rm(1): getopt(3) with "dfiIPRrvWx".
 struct Options {
   bool dir = false;              ///< -d: remove empty directories as well.
@@ -83,12 +86,12 @@ struct Argv {
   /// @warn Consumes Argv. Do not re-use it.
   auto TryParseOrAbort() && noexcept -> std::expected<Cli, int>;
 
+  /// @brief Report the "usage: ..." message for a given error.
+  void ReportUsage(UsageError error) const noexcept;
+
  private:
   /// @brief Parse the arguments the same way that BSD rm does.
   auto Parse() const noexcept -> std::expected<Cli, UsageError>;
-
-  /// @brief Report the "usage: ..." message for a given error.
-  void ReportUsage(UsageError error) const noexcept;
 
   /// @brief Check whether any of the given exceptions are unsupported and
   ///        abort if so.
