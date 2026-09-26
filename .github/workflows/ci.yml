@@ -110,13 +110,6 @@ jobs:
           key: remmy-macos-${{ matrix.preset }}
       - run: cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - run: cmake --build --preset ${{ matrix.preset }}
-      # The runner's disk makes the FAT32/ExFAT image tests I/O-bound; keep the
-      # images in RAM (mountpoints stay in TMPDIR, see tests/volumes.py).
-      - name: RAM disk for test disk images
-        run: |
-          dev=$(hdiutil attach -nomount ram://4194304 | awk '{print $1}')
-          diskutil erasevolume APFS remmy-ram "$dev"
-          echo "REMMY_TEST_IMAGE_DIR=/Volumes/remmy-ram" >> "$GITHUB_ENV"
       # Runs the pytest end-to-end suite (tests/) against the built executable.
       # Parity checks output bytes, not build-type behaviour: release covers it.
       - run: ctest --preset ${{ matrix.preset }} -V

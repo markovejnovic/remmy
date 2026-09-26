@@ -10,7 +10,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -117,17 +116,8 @@ def _round_trips(probe: Path, names: tuple[str, ...]) -> bool:
 
 @contextmanager
 def mounted(fs: str, workdir: Path, size: str = "512m") -> Iterator[Volume]:
-    """Create, attach, probe, and finally detach a volume of type ``fs``.
-
-    ``$REMMY_TEST_IMAGE_DIR`` moves the image file (not the mountpoint) elsewhere,
-    e.g. onto a RAM disk: a user cannot mount onto a directory of a volume it mounted.
-    """
-    image_dir = (
-        Path(tempfile.mkdtemp(dir=os.environ["REMMY_TEST_IMAGE_DIR"]))
-        if "REMMY_TEST_IMAGE_DIR" in os.environ
-        else workdir
-    )
-    image = image_dir / f"{fs.replace(' ', '_')}.sparseimage"
+    """Create, attach, probe, and finally detach a volume of type ``fs``."""
+    image = workdir / f"{fs.replace(' ', '_')}.sparseimage"
     mountpoint = workdir / f"{fs.replace(' ', '_')}.mnt"
     mountpoint.mkdir()
     _hdiutil(
@@ -151,5 +141,3 @@ def mounted(fs: str, workdir: Path, size: str = "512m") -> Iterator[Volume]:
         with suppress(VolumeUnavailable):
             _hdiutil("detach", "-quiet", "-force", str(mountpoint))
         image.unlink(missing_ok=True)
-        if image_dir != workdir:
-            image_dir.rmdir()
