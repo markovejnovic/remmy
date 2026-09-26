@@ -5,11 +5,3 @@ cannot outlive the bug. Delete the marker, not the test.
 """
 
 from __future__ import annotations
-
-import pytest
-
-PATH_MAX_EXCEEDED = pytest.mark.xfail(
-    strict=True,
-    reason="directories are removed by full path (rmdir), which fails with "
-    "ENAMETOOLONG once the tree is deeper than PATH_MAX",
-)

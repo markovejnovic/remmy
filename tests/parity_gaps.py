@@ -85,18 +85,6 @@ def mark_known_gaps(items: list[pytest.Item]) -> None:
 
 
 GAPS: dict[str, Gap] = {
-    "deep-paths": Gap(
-        reason=(
-            "Trees deeper than PATH_MAX: remmy rmdirs directories by full path and gets ENAMETOOLONG, fts removes "
-            "them (and -v prints the long paths). Same bug as known_bugs.PATH_MAX_EXCEEDED."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_fs.py::test_length_limits[deep_tree_beyond_pathmax]",
-                "test_rm_parity_fs.py::test_length_limits[deep_tree_beyond_pathmax_v]",
-            }
-        ),
-    ),
     "prompt-interactive": Gap(
         reason=(
             "-i asks 'remove <path>? ' on stderr for each operand, reads one line from stdin (a pipe, /dev/null "

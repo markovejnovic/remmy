@@ -8,7 +8,6 @@ from pathlib import Path
 import fstree
 import pytest
 from harness import Runner
-from known_bugs import PATH_MAX_EXCEEDED
 from pytest_check import check
 
 # macOS PATH_MAX; Linux is 4096. Chains below exceed both.
@@ -107,7 +106,6 @@ def test_symlinked_operand_that_fits_path_max_only_as_typed(run: Runner, workdir
         assert fstree.listing(workdir) == {"l"}
 
 
-@PATH_MAX_EXCEEDED
 @pytest.mark.slow
 @pytest.mark.parametrize("multiple", [2, 5])
 def test_tree_deeper_than_path_max(run: Runner, workdir: Path, threads: int, multiple: int) -> None:
@@ -124,13 +122,46 @@ def test_tree_deeper_than_path_max(run: Runner, workdir: Path, threads: int, mul
         assert fstree.listing(workdir) == set()
 
 
-@PATH_MAX_EXCEEDED
+@pytest.mark.slow
+def test_tree_deeper_than_path_max_through_symlink(run: Runner, workdir: Path, threads: int) -> None:
+    """``l/`` walks its tree from the link's target, which deep directories are
+    then reached from in PATH_MAX-sized pieces too; the link itself stays."""
+    name = "n" * 50
+    fstree.deep_chain(workdir / "t", depth=(PATH_MAX * 3) // (len(name) + 1), name=name)
+    (workdir / "l").symlink_to("t")
+
+    res = run("-r", "l/", threads=threads)
+
+    with check:
+        assert (res.returncode, res.stderr) == (0, ""), res
+    with check:
+        assert fstree.listing(workdir) == {"l"}
+
+
 @pytest.mark.slow
 def test_tree_deeper_than_path_max_under_fd_limit(run: Runner, workdir: Path) -> None:
     name = "m" * 100
     fstree.deep_chain(workdir / "t", depth=(PATH_MAX * 3) // len(name), name=name)
 
     res = run("-r", "t", threads=4, fd_limit=16)
+
+    with check:
+        assert (res.returncode, res.stderr) == (0, ""), res
+    with check:
+        assert fstree.listing(workdir) == set()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("fd_limit", [12, 64])
+def test_wide_tree_deeper_than_path_max_under_fd_limit(run: Runner, workdir: Path, fd_limit: int, threads: int) -> None:
+    """Siblings past PATH_MAX, opened ahead of their walk, hold descriptors
+    while another's removal needs one to reach its parent: that removal waits
+    for one, as an open does, rather than fail with EMFILE."""
+    name = "n" * 50
+    depth = (PATH_MAX + 512) // (len(name) + 1)
+    fstree.deep_chain(workdir / "t", depth=depth, name=name, leaf_files=0, wide=300)
+
+    res = run("-r", "t", threads=threads, fd_limit=fd_limit)
 
     with check:
         assert (res.returncode, res.stderr) == (0, ""), res

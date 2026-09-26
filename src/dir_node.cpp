@@ -2,11 +2,15 @@
 
 #include "dir_node.hpp"
 
+#include <fcntl.h>
+
 #include <algorithm>
+#include <climits>
 #include <cstddef>
 #include <expected>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include "cutils/os/os.hpp"
@@ -66,11 +70,66 @@ auto DirNode::Open(std::string& scratch, const cutils::os::Fd* root) noexcept
   auto opened = root != nullptr
                     ? cutils::os::openat(*root, PathInto(scratch, "."), kFlags)
                     : cutils::os::open(PathInto(scratch), kFlags);
+  if (!opened && opened.error().code == std::errc::filename_too_long &&
+      parent_ != nullptr) {
+    auto parent = OpenParent(scratch, root);
+    if (!parent) {
+      return std::unexpected(parent.error());
+    }
+    opened = cutils::os::openat(*parent, name_.c_str(), kFlags);
+  }
   if (!opened) {
     return std::unexpected(opened.error());
   }
   fd_ = *std::move(opened);
   return {};
+}
+
+auto DirNode::OpenParent(std::string& scratch,
+                         const cutils::os::Fd* root) const noexcept
+    -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
+  constexpr int kFlags = O_RDONLY | O_DIRECTORY | O_CLOEXEC;
+  // The longest path open(2) takes, its terminating NUL aside.
+  constexpr std::size_t kMaxPiece = PATH_MAX - 1;
+
+  if (parent_ == nullptr) {
+    return std::unexpected(cutils::os::OpenError{
+        .code = std::errc::not_a_directory, .retryable = false});
+  }
+  parent_->PathInto(scratch, root != nullptr ? "." : "");
+
+  // Each piece ends at a slash, which is overwritten with the NUL that ends
+  // it, and is opened relative to the directory the one before it opened.
+  cutils::os::Fd base;
+  std::size_t start = 0;
+  while (true) {
+    const bool last = scratch.size() - start <= kMaxPiece;
+    std::size_t end = scratch.size();
+    if (!last) {
+      end = scratch.rfind('/', start + kMaxPiece);
+      if (end == std::string::npos || end <= start) {
+        // A single name longer than PATH_MAX; open(2) would say the same.
+        return std::unexpected(cutils::os::OpenError{
+            .code = std::errc::filename_too_long, .retryable = false});
+      }
+      scratch[end] = '\0';
+    }
+
+    const char* piece = start < scratch.size() ? scratch.c_str() + start : ".";
+    auto opened = base.IsOpen()    ? cutils::os::openat(base, piece, kFlags)
+                  : root != nullptr ? cutils::os::openat(*root, piece, kFlags)
+                                    : cutils::os::open(piece, kFlags);
+    if (!opened) {
+      return std::unexpected(opened.error());
+    }
+    base = *std::move(opened);
+    if (last) {
+      return base;
+    }
+    scratch[end] = '/';
+    // Doubled slashes would start the next piece at the root.
+    start = std::min(scratch.find_first_not_of('/', end), scratch.size());
+  }
 }
 
 }  // namespace remmy

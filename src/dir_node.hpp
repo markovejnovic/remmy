@@ -3,12 +3,15 @@
 #ifndef REMMY_DIR_NODE_HPP
 #define REMMY_DIR_NODE_HPP
 
+#include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cutils/os/fd.hpp>
 #include <expected>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -48,6 +51,23 @@ struct DirNode {
   /// (see `remaining_children_dirs_`). Whoever sets it first reports the
   /// directory. It sits in the padding after `fd_`, so it costs no space.
   std::atomic<bool> unsearchable_{false};
+
+  /// @brief Whether the walk of the directory is over and only its removal
+  ///        is left, parked until a descriptor frees up: a directory deeper
+  ///        than PATH_MAX is removed from its parent, which takes one.
+  ///
+  /// Set by the worker that dropped the last reference to the directory,
+  /// before it parks it, and read by the one that takes it back up, which
+  /// the scheduler's queues order after it. It sits in the padding after
+  /// `fd_` too.
+  bool removal_parked_ = false;
+
+  /// @brief The length of the path of the directory as it would be passed to
+  ///        a syscall, capped at the largest value this holds, which is past
+  ///        PATH_MAX; see TooLongForPath. It fills the rest of the padding
+  ///        after `fd_`.
+  std::uint16_t path_size_;
+  static_assert(std::numeric_limits<std::uint16_t>::max() >= PATH_MAX);
 
   //// @brief Pointer to the parent DirNode.
   ///
@@ -100,10 +120,34 @@ struct DirNode {
   explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name,
                    std::uint32_t operand)
       : fd_(std::move(fd)),
+        path_size_(PathSize(parent, name.size())),
         parent_(parent),
         name_(std::move(name)),
         remaining_children_dirs_(1),
         operand_(operand) {}
+
+  /// @brief The `path_size_` of an entry `name_size` bytes long of `parent`,
+  ///        or, without one, of a root with a name that long.
+  [[nodiscard]] static auto PathSize(const DirNode* parent,
+                                     std::size_t name_size) noexcept
+      -> std::uint16_t {
+    const std::size_t size =
+        parent == nullptr ? name_size
+                          : std::size_t{parent->path_size_} + 1 + name_size;
+    return static_cast<std::uint16_t>(
+        std::min<std::size_t>(size, std::numeric_limits<std::uint16_t>::max()));
+  }
+
+  /// @brief Whether the path of the directory is too long for a syscall to
+  ///        take (ENAMETOOLONG), so that it can only be reached from a
+  ///        descriptor of one of its ancestors.
+  ///
+  /// Measured against the operand as typed: a walk reached through its root
+  /// (see OpenParent) passes shorter paths, which this may then call too
+  /// long when they are not quite.
+  [[nodiscard]] auto TooLongForPath() const noexcept -> bool {
+    return path_size_ >= PATH_MAX;
+  }
 
   /// @brief Walk the parent chain to build the full path into the given
   ///        output buffer.
@@ -131,9 +175,24 @@ struct DirNode {
   ///             is then taken relative to rather than to the operand as
   ///             typed.
   ///
-  /// If this succeeds, it guarantees [`fd_.IsOpen()`].
+  /// If this succeeds, it guarantees [`fd_.IsOpen()`]. A path longer than
+  /// PATH_MAX is opened through OpenParent.
   auto Open(std::string& scratch, const cutils::os::Fd* root = nullptr) noexcept
       -> std::expected<void, cutils::os::OpenError>;
+
+  /// @brief Open the directory this node is an entry of, by its path in
+  ///        pieces that each fit PATH_MAX, so that it can be reached however
+  ///        deep it lies, as fts(3) reaches it by chdir(2)ing down.
+  ///
+  /// Only for a node whose path is too long to use whole (ENAMETOOLONG): it
+  /// costs an open per PATH_MAX of path. Not for the root, which has no
+  /// parent.
+  ///
+  /// @param scratch A scratch buffer for the path.
+  /// @param root As in Open.
+  [[nodiscard]] auto OpenParent(std::string& scratch,
+                                const cutils::os::Fd* root = nullptr)
+      const noexcept -> std::expected<cutils::os::Fd, cutils::os::OpenError>;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the
