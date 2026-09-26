@@ -79,6 +79,7 @@ AT_PARITY = frozenset(
         "test_rm_parity_fs.py::test_invocation_names[argv0_path_to_unlink_name]",
         "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink_dd]",
         "test_rm_parity_fs.py::test_invocation_names[argv0_symlink_unlink]",
+        "test_rm_parity_fs.py::test_length_limits[deep_tree_beyond_pathmax]",
         "test_rm_parity_fs.py::test_links_and_special_files[fifo_socket_in_tree]",
         "test_rm_parity_fs.py::test_links_and_special_files[symlink_to_dir]",
         "test_rm_parity_fs.py::test_permissions[file_0444_closed_stdin]",
