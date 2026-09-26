@@ -154,6 +154,23 @@ class TaskScheduler {
     return true;
   }
 
+  /// @brief Wait until every task submitted so far, and every task those
+  ///        submitted in turn, has been processed.
+  ///
+  /// Unlike [`Wait`], this leaves the workers running, so more tasks may be
+  /// submitted afterwards. Whatever the processed tasks did happens before it
+  /// returns.
+  ///
+  /// @note Must not be called from within a worker, whose own task would
+  ///       never finish.
+  void Drain() noexcept {
+    for (auto owed = activity_.pending_tasks_.load(std::memory_order_acquire);
+         owed != 0;
+         owed = activity_.pending_tasks_.load(std::memory_order_acquire)) {
+      activity_.pending_tasks_.wait(owed, std::memory_order_acquire);
+    }
+  }
+
   /// @brief Wait for the scheduler to finish its tasks.
   ///
   /// @note After calling `Wait`, the scheduler cannot be re-used. All
@@ -164,12 +181,7 @@ class TaskScheduler {
            "TaskScheduler::Wait invoked multiple times");
 #endif
 
-    for (auto owed = activity_.pending_tasks_.load(std::memory_order_relaxed);
-         owed != 0;
-         owed = activity_.pending_tasks_.load(std::memory_order_relaxed)) {
-      activity_.pending_tasks_.wait(owed, std::memory_order_relaxed);
-    }
-
+    Drain();
     StopAndJoinThreads();
   }
 
@@ -297,7 +309,9 @@ class TaskScheduler {
       }
 
       self.worker.Process(*task, context);
-      if (activity_.pending_tasks_.fetch_sub(1, std::memory_order_relaxed) ==
+      // Release: a Drain that sees the count reach zero also sees what the
+      // task did.
+      if (activity_.pending_tasks_.fetch_sub(1, std::memory_order_release) ==
           1) {
         activity_.pending_tasks_.notify_one();
       }

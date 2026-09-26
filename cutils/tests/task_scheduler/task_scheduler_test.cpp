@@ -284,3 +284,44 @@ SCENARIO("A worker prefers urgent work over demoted work", "[task_scheduler]") {
     }
   }
 }
+
+SCENARIO("A drained scheduler has run everything and takes more work",
+         "[task_scheduler]") {
+  const auto workers = GENERATE(1UZ, 4UZ);
+  CAPTURE(workers);
+
+  GIVEN("a scheduler whose tasks fan out into a complete binary tree") {
+    constexpr std::size_t kCount = 4095;
+    std::vector<std::atomic<unsigned>> seen(kCount);
+    cutils::TaskScheduler executor(workers, TreeWork(seen));
+    const auto visited_once = [&seen] {
+      return std::ranges::all_of(seen, [](const auto& visits) {
+        return visits.load(std::memory_order_relaxed) == 1;
+      });
+    };
+
+    WHEN("the root is submitted and the scheduler is drained") {
+      REQUIRE(executor.Submit(0));
+      executor.Drain();
+
+      THEN("every node was already visited exactly once") {
+        REQUIRE(visited_once());
+      }
+
+      AND_WHEN("the root is submitted again and the scheduler is waited on") {
+        for (auto& visits : seen) {
+          visits.store(0, std::memory_order_relaxed);
+        }
+        REQUIRE(executor.Submit(0));
+        executor.Drain();
+        const bool drained_again = visited_once();
+        executor.Wait();
+
+        THEN("the second tree ran too, before the second drain returned") {
+          REQUIRE(drained_again);
+          REQUIRE(SumAcrossWorkers(executor, &TreeWork::count) == 2 * kCount);
+        }
+      }
+    }
+  }
+}

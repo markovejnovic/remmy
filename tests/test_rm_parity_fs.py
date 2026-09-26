@@ -350,6 +350,30 @@ RECURSION = [
     Case("duplicate_dir_operands_r", ["-rv", "d", "d"], (Dir("d"), File("d/x", "x"))),
     Case("overlap_parent_then_child", ["-rv", "d", "d/x"], (Dir("d"), File("d/x", "x"), File("d/y", "x"))),
     Case("overlap_child_then_parent", ["-rv", "d/x", "d"], (Dir("d"), File("d/x", "x"), File("d/y", "x"))),
+    # Without -v too, a later operand sees what an earlier walk removed, and
+    # errors of walked operands come out in operand order.
+    Case("duplicate_dir_operands_quiet", ["-r", "d", "d"], (Dir("d"), File("d/x", "x"))),
+    Case("duplicate_dir_operands_other_case", ["-r", "d", "D"], (Dir("d"), File("d/x", "x"))),
+    Case("overlap_parent_then_child_quiet", ["-r", "d", "d/x"], (Dir("d"), File("d/x", "x"), File("d/y", "x"))),
+    Case("overlap_parent_then_subdir_quiet", ["-r", "d", "d/s"], (Dir("d/s"), File("d/s/x", "x"))),
+    Case("overlap_subdir_then_parent_quiet", ["-r", "d/s", "d/t", "d"], (Dir("d/s"), Dir("d/t"), File("d/s/x", "x"))),
+    Case("overlap_via_symlink_quiet", ["-r", "d", "l/s"], (Dir("d/s"), File("d/s/x", "x"), Symlink("l", "d"))),
+    Case("overlap_symlink_slash_then_link", ["-r", "l/", "l"], (Dir("t/s"), File("t/s/x", "x"), Symlink("l", "t"))),
+    Case("overlap_dir_then_symlink_slash", ["-r", "t", "l/"], (Dir("t/s"), File("t/s/x", "x"), Symlink("l", "t"))),
+    Case("siblings_rf", ["-rf", "p/a", "p/b", "p/f", "p/c"], (Dir("p/a/s"), Dir("p/b"), Dir("p/c"), File("p/f", "x"))),
+    Case(
+        "sibling_walks_errors_in_order",
+        ["-r", "a", "b", "nope", "c", "f"],
+        (
+            *(e for n in "abc" for e in (Dir(f"{n}/ro", mode=0o555), File(f"{n}/ro/x", "x"), File(f"{n}/y", "x"))),
+            File("f", "x"),
+        ),
+    ),
+    Case(
+        "sibling_walks_errors_in_order_rf",
+        ["-rf", "p/a", "p/b", "p/nope", "p/c"],
+        tuple(e for n in "abc" for e in (Dir(f"p/{n}/ro", mode=0o555), File(f"p/{n}/ro/x", "x"))),
+    ),
 ]
 
 
