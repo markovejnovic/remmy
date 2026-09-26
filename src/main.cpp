@@ -1313,8 +1313,14 @@ auto main(int argc, char** argv) -> int {
         return {};
       }
 
-      auto dirfd = cutils::os::open(
-          path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      constexpr int kOpenRoot = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+      auto dirfd = cutils::os::open(path, kOpenRoot);
+      if (!dirfd && dirfd.error().retryable && walks.Running()) {
+        // Out of descriptors, which the running walks hold: rm would be done
+        // with them by now, so finish them and try again.
+        finish_walks();
+        dirfd = cutils::os::open(path, kOpenRoot);
+      }
       if (!dirfd) {
         // As in the walk: under -f, rm removes an unreadable empty directory.
         if (!force || !DirGone(log_removed(cutils::os::rmdir(path), path))) {
