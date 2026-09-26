@@ -19,6 +19,7 @@ xfails.
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,8 @@ LEGACY = {"COMMAND_MODE": "legacy"}
 PATH_PREFIX = "/".join(["abcdefghij"] * 92) + "/"  # 1012 bytes
 PATH_1023 = PATH_PREFIX + "x" * 11
 PATH_1024 = PATH_PREFIX + "x" * 12  # PATH_MAX counts the NUL, so this one is too long
+SELF_LINKED = (Dir("e"), Dir("e/a"), Dir("e/a/b"), Dir("e/c"), Dir("e/c/d"), File("e/f", "x"))
+WRAPPED = (Dir("w"), *(replace(e, path=f"w/{e.path}") for e in SELF_LINKED))
 
 
 def check(case: Case, remmy_bin: Path, tmp_path: Path, is_root: bool) -> None:
@@ -93,6 +96,9 @@ SYMLINKS = [
     # A link to '.' or '..' walks back into the tree that holds it.
     Case("r_symlink_to_dot_slash", ["-rv", "l/"], (Symlink("l", "."), File("a", "x"))),
     Case("r_symlink_to_dotdot_slash", ["-rv", "d/l/"], (Dir("d"), Symlink("d/l", ".."), File("a", "x"))),
+    # A symlink earlier in the path that the walk removes: rm is inside by then, so only the root's rmdir fails.
+    Case("r_symlink_to_dotdot_mid_path", ["-r", "e/l/e"], SELF_LINKED + (Symlink("e/l", ".."),)),
+    Case("r_symlink_to_dot_then_dotdot", ["-r", "w/e/l/../e"], WRAPPED + (Symlink("w/e/l", "."),)),
     Case("i_symlink_to_dir_nor", ["-i", "l"], LINKED, stdin=pipe("y\n")),
     Case("ir_symlink_to_dir_slash", ["-irv", "l/"], LINKED, stdin=pipe("y\n" * 6)),
 ]
