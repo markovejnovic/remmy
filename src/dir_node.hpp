@@ -108,8 +108,7 @@ struct DirNode {
   ///        output buffer.
   ///
   /// @param root When not empty, stands in for the name of the root at the
-  ///             top of the chain: the path the walk reaches that directory
-  ///             by, when that is not the operand as typed.
+  ///             top of the chain: "." makes the path relative to the root.
   auto PathInto(std::string& out, std::string_view root = {}) const
       -> const char*;
 
@@ -127,10 +126,12 @@ struct DirNode {
   ///
   /// @param scratch A scratch buffer which this utility uses to compute
   ///                the path to open.
-  /// @param root See PathInto.
+  /// @param root When not null, the root of the walk, open, which the path
+  ///             is then taken relative to rather than to the operand as
+  ///             typed.
   ///
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
-  auto Open(std::string& scratch, std::string_view root = {}) noexcept
+  auto Open(std::string& scratch, const cutils::os::Fd* root = nullptr) noexcept
       -> std::expected<void, cutils::os::OpenError>;
 };
 

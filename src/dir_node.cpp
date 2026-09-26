@@ -56,14 +56,16 @@ auto DirNode::PathInto(std::string& out, std::string_view root) const
   return out.c_str();
 }
 
-auto DirNode::Open(std::string& scratch, std::string_view root) noexcept
+auto DirNode::Open(std::string& scratch, const cutils::os::Fd* root) noexcept
     -> std::expected<void, cutils::os::OpenError> {
   if (fd_.IsOpen()) {
     return {};
   }
 
-  auto opened = cutils::os::open(
-      PathInto(scratch, root), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  constexpr int kFlags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+  auto opened = root != nullptr
+                    ? cutils::os::openat(*root, PathInto(scratch, "."), kFlags)
+                    : cutils::os::open(PathInto(scratch), kFlags);
   if (!opened) {
     return std::unexpected(opened.error());
   }
