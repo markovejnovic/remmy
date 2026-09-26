@@ -374,6 +374,28 @@ RECURSION = [
         ["-rf", "p/a", "p/b", "p/nope", "p/c"],
         tuple(e for n in "abc" for e in (Dir(f"p/{n}/ro", mode=0o555), File(f"p/{n}/ro/x", "x"))),
     ),
+    # Sibling walks named through "./", a trailing slash or a symlinked parent
+    # still see what an earlier operand removed, and so do names that reach a
+    # sibling's tree through a symlink or "..".
+    Case("siblings_dot_and_slash", ["-r", "./a", "b/", "a", "./b"], (Dir("a/s"), Dir("b/s"), File("a/s/x", "x"))),
+    Case("siblings_slash_symlink_into", ["-r", "d/", "l/"], (Dir("d/s"), File("d/s/x", "x"), Symlink("l", "d/s"))),
+    Case("siblings_slash_symlink_to", ["-r", "a", "a2/", "b"], (Dir("a/s"), Dir("b"), Symlink("a2", "a"))),
+    Case(
+        "siblings_via_parent_symlink",
+        ["-r", "s/a", "t/b", "s/b", "t/a"],
+        (Dir("t/a/x"), Dir("t/b/x"), Symlink("s", "t")),
+    ),
+    Case(
+        "siblings_parent_through_sibling",
+        ["-r", "a", "l/m/b"],
+        (Dir("a/inner"), Symlink("a/inner/m", "../.."), Symlink("l", "a/inner"), Dir("b"), File("b/f", "x")),
+    ),
+    Case("siblings_dotdot_through_sibling", ["-r", "q/a", "q/a/k/../../b"], (Dir("q/a/k"), Dir("q/b/s"))),
+    Case(
+        "siblings_parent_symlink_removed",
+        ["-r", "d/t/a", "d/t/t", "d/t/b", "d/b"],
+        (Dir("d/a/s"), Dir("d/b/s"), Symlink("d/t", ".")),
+    ),
 ]
 
 

@@ -55,6 +55,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -900,59 +901,191 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path,
   return true;
 }
 
-/// @brief The directory an operand names its entry in, as typed, when it
-///        takes no more than that: "" for a bare name ("a"), `P` for "P/a"
-///        where P has no empty, "." or ".." component, and "/" for "/a".
-///
-/// Any other shape has none: a trailing slash (which follows a symlink), or a
-/// path that climbs or repeats a slash.
-constexpr auto ParentAsTyped(std::string_view path) noexcept
-    -> std::optional<std::string_view> {
-  const std::size_t slash = path.rfind('/');
-  if (slash == std::string_view::npos) {
-    return path.empty() ? std::nullopt
-                        : std::optional<std::string_view>(std::string_view());
+/// @brief An operand read as an entry of a directory.
+struct EntryOperand {
+  /// @brief The directory, as typed: "" for the working directory ("a"), "/"
+  ///        for the root ("/a"), `P` for "P/a".
+  std::string_view parent;
+  /// @brief The operand without its trailing slashes.
+  std::string_view entry;
+  /// @brief Whether the operand ended in slashes, which follow a symlink.
+  bool trailing_slash;
+};
+
+/// @brief `path` read as an entry of a directory, or none when its last
+///        component is "." or ".." or it has none at all ("/").
+constexpr auto AsEntry(std::string_view path) noexcept
+    -> std::optional<EntryOperand> {
+  std::string_view entry = path;
+  while (entry.size() > 1 && entry.back() == '/') {
+    entry.remove_suffix(1);
   }
-  const std::string_view name = path.substr(slash + 1);
+  const std::size_t slash = entry.rfind('/');
+  const std::string_view name =
+      slash == std::string_view::npos ? entry : entry.substr(slash + 1);
   if (name.empty() || name == "." || name == "..") {
     return std::nullopt;
   }
-  if (slash == 0) {
-    return path.substr(0, 1);
-  }
-  const std::string_view parent = path.substr(0, slash);
-  std::string_view rest = parent.front() == '/' ? parent.substr(1) : parent;
-  while (true) {
-    const std::size_t next = rest.find('/');
-    const std::string_view component = rest.substr(0, next);
-    if (component.empty() || component == "." || component == "..") {
-      return std::nullopt;
+  std::string_view parent;
+  if (slash != std::string_view::npos) {
+    parent = entry.substr(0, slash + 1);
+    while (parent.size() > 1 && parent.back() == '/') {
+      parent.remove_suffix(1);
     }
-    if (next == std::string_view::npos) {
-      return parent;
-    }
-    rest.remove_prefix(next + 1);
   }
+  return EntryOperand{.parent = parent,
+                      .entry = entry,
+                      .trailing_slash = entry.size() != path.size()};
 }
 
-/// @brief Whether resolving `parent` (see ParentAsTyped) only goes down into
-///        real directories: none of its leading paths is a symlink.
-auto ResolvesDownward(std::string_view parent) -> bool {
-  if (parent.empty() || parent == "/") {
-    return true;
+/// @brief Whether `path` is a directory itself, not a symlink to one.
+auto IsRealDirectory(std::string_view path) -> bool {
+  const std::string terminated(path);
+  struct stat path_stat;
+  return cutils::os::lstat(terminated.c_str(), &path_stat) == 0 &&
+         S_ISDIR(path_stat.st_mode);
+}
+
+/// @brief A file, by identity.
+struct FileId {
+  dev_t device;
+  ino_t inode;
+
+  auto operator==(const FileId&) const -> bool = default;
+};
+
+/// @brief The identity of the directory open on `dir`.
+auto IdOf(const cutils::os::Fd& dir) noexcept -> std::optional<FileId> {
+  struct stat dir_stat;
+  if (cutils::os::fstatat(dir, ".", &dir_stat, 0) != 0) {
+    return std::nullopt;
   }
-  for (std::size_t end = parent.find('/', 1);;
-       end = parent.find('/', end + 1)) {
-    const std::string leading(parent.substr(0, end));
-    struct stat leading_stat;
-    if (cutils::os::lstat(leading.c_str(), &leading_stat) != 0 ||
-        !S_ISDIR(leading_stat.st_mode)) {
+  return FileId{.device = dir_stat.st_dev, .inode = dir_stat.st_ino};
+}
+
+/// @brief The directory `parent` (see EntryOperand) resolves to, provided that
+///        removing the trees under that directory's entries cannot change
+///        what it resolves to.
+///
+/// It follows `parent` the way the kernel resolves it, component by component,
+/// symlinks, "." and ".." included, and keeps every directory it looks a name
+/// up in. It then rejects `parent` if one of those lies below the directory
+/// it resolved to: inside one of its entries, where a walk of that entry would
+/// remove it. Directories above it, which `/tmp` -> `private/tmp` passes
+/// through, are out of reach of those walks. Anything it cannot follow (an
+/// unreadable directory, a symlink loop) is rejected too.
+///
+/// The symlinks it follows are added to `links`: removing one of them would
+/// change what `parent` resolves to.
+auto ResolvesAbove(std::string_view parent, std::vector<FileId>& links)
+    -> std::optional<FileId> {
+  constexpr int kOpenDir = O_RDONLY | O_DIRECTORY | O_CLOEXEC;
+  // MAXSYMLINKS: where the kernel gives up with ELOOP.
+  constexpr int kMaxLinks = 32;
+  // Past this depth, a directory tree is not worth reasoning about.
+  constexpr int kMaxDepth = 1024;
+
+  std::vector<cutils::os::Fd> visited;
+  const auto enter_root = [&visited](bool absolute) -> bool {
+    auto dir = cutils::os::open(absolute ? "/" : ".", kOpenDir);
+    if (!dir) {
       return false;
     }
-    if (end == std::string_view::npos) {
-      return true;
+    visited.push_back(*std::move(dir));
+    return true;
+  };
+
+  if (!enter_root(!parent.empty() && parent.front() == '/')) {
+    return std::nullopt;
+  }
+  std::string rest(parent);
+  std::size_t at = 0;
+  int followed = 0;
+  while (true) {
+    while (at < rest.size() && rest[at] == '/') {
+      ++at;
+    }
+    if (at == rest.size()) {
+      break;
+    }
+    const std::size_t end = std::min(rest.find('/', at), rest.size());
+    const std::string name = rest.substr(at, end - at);
+    at = end;
+    if (name == ".") {
+      continue;
+    }
+    const bool up = name == "..";
+    auto next = cutils::os::openat(visited.back(), name.c_str(),
+                                   up ? kOpenDir : kOpenDir | O_NOFOLLOW);
+    if (next) {
+      visited.push_back(*std::move(next));
+      continue;
+    }
+    // Not a directory to go into: follow it if it is a symlink.
+    std::array<char, PATH_MAX> target{};
+    const ssize_t length = ::readlinkat(visited.back().get(), name.c_str(),
+                                        target.data(), target.size());
+    struct stat link_stat;
+    if (up || length <= 0 || std::cmp_greater_equal(length, target.size()) ||
+        ++followed > kMaxLinks ||
+        cutils::os::fstatat(visited.back(), name.c_str(), &link_stat,
+                            AT_SYMLINK_NOFOLLOW) != 0) {
+      return std::nullopt;
+    }
+    links.push_back({.device = link_stat.st_dev, .inode = link_stat.st_ino});
+    const std::string_view link(target.data(),
+                                static_cast<std::size_t>(length));
+    rest = std::string(link) + "/" + rest.substr(at);
+    at = 0;
+    if (link.front() == '/' && !enter_root(true)) {
+      return std::nullopt;
     }
   }
+
+  const std::optional<FileId> resolved = IdOf(visited.back());
+  if (!resolved) {
+    return std::nullopt;
+  }
+  // Directories known to be out of reach: from `resolved` up to the root, and
+  // then those above the other visited directories.
+  std::vector<FileId> above;
+  // Whether `start` is out of reach: it climbs to the root, or to a directory
+  // already known out of reach, without passing `resolved`.
+  const auto out_of_reach = [&above, &resolved](const cutils::os::Fd& start) {
+    std::optional<FileId> id = IdOf(start);
+    cutils::os::Fd dir;
+    for (int depth = 0; id.has_value() && depth < kMaxDepth; ++depth) {
+      if (depth > 0 && *id == *resolved) {
+        return false;
+      }
+      if (std::ranges::contains(above, *id)) {
+        return true;
+      }
+      above.push_back(*id);
+      auto parent_dir =
+          cutils::os::openat(depth == 0 ? start : dir, "..", kOpenDir);
+      if (!parent_dir) {
+        return false;
+      }
+      const std::optional<FileId> parent_id = IdOf(*parent_dir);
+      if (parent_id == id) {
+        // The root is its own parent.
+        return true;
+      }
+      dir = *std::move(parent_dir);
+      id = parent_id;
+    }
+    return false;
+  };
+  if (!out_of_reach(visited.back())) {
+    return std::nullopt;
+  }
+  for (const cutils::os::Fd& dir : visited) {
+    if (!out_of_reach(dir)) {
+      return std::nullopt;
+    }
+  }
+  return resolved;
 }
 
 /// @brief The walks main leaves running while it goes on with later operands.
@@ -961,51 +1094,93 @@ auto ResolvesDownward(std::string_view parent) -> bool {
 /// next one, and remmy removes them in that order too: a later operand may be
 /// the same directory, lie inside it, contain it or name a path through it.
 /// Only where none of that can happen does main go on while a walk runs, so
-/// that many directory operands (`rm -rf dir/*`) are still walked together:
-/// when the walked operands and the next one are entries of one directory,
-/// named through the same path (see ParentAsTyped) of real directories only
-/// (see ResolvesDownward), removing one of them cannot change what another's
-/// path leads to. A next operand that is one of the walked directories under
-/// another name ("d" and "D" on a case-insensitive volume) still waits.
-/// OrderedStderr keeps the diagnostics in operand order meanwhile.
+/// that many directory operands (`rm -rf dir/*`, `rm -rf */`) are still walked
+/// together: when the walked operands and the next one are entries of one
+/// directory, named through paths that resolve to it without passing below it
+/// (see ResolvesAbove), removing one of them cannot change what another's path
+/// leads to. A next operand that is one of the walked directories under
+/// another name ("d" and "D" on a case-insensitive volume) or a symlink on the
+/// way to them still waits, and so does one with a trailing slash that is not
+/// a directory itself (a symlink, which the slash follows). OrderedStderr keeps
+/// the diagnostics in operand order meanwhile.
 class ConcurrentWalks {
  public:
-  /// @brief Whether an operand named in `parent` may be looked at while the
+  /// @brief Whether a walk is running.
+  [[nodiscard]] auto Running() const noexcept -> bool {
+    return !roots_.empty();
+  }
+
+  /// @brief Whether an operand, read as `entry`, may be looked at while the
   ///        walks run.
-  [[nodiscard]] auto Admits(
-      std::optional<std::string_view> parent) const noexcept -> bool {
-    return roots_.empty() || (parent.has_value() && *parent == parent_);
+  [[nodiscard]] auto Admits(const std::optional<EntryOperand>& entry) -> bool {
+    if (roots_.empty()) {
+      return true;
+    }
+    if (!entry.has_value()) {
+      return false;
+    }
+    if (entry->parent == parent_) {
+      return true;
+    }
+    if (ResolvesAbove(entry->parent, links_) != directory_) {
+      return false;
+    }
+    parent_.assign(entry->parent);
+    return true;
   }
 
-  /// @brief Whether the directory `inode` is the root of a running walk.
-  [[nodiscard]] auto Walks(ino_t inode) const noexcept -> bool {
-    return roots_.contains(inode);
+  /// @brief Whether the running walks depend on the file `path_stat` is
+  ///        about: it is the root of one of them, or a symlink the path to
+  ///        their roots goes through.
+  [[nodiscard]] auto Involve(const struct stat& path_stat) const noexcept
+      -> bool {
+    if (S_ISDIR(path_stat.st_mode)) {
+      return roots_.contains(path_stat.st_ino);
+    }
+    return S_ISLNK(path_stat.st_mode) &&
+           std::ranges::contains(links_, FileId{.device = path_stat.st_dev,
+                                                .inode = path_stat.st_ino});
   }
 
-  /// @brief Records the walk just started of the directory `inode`, named in
-  ///        `parent`; false when main has to wait for it instead.
-  auto Add(std::optional<std::string_view> parent, ino_t inode) -> bool {
-    if (!parent.has_value()) {
+  /// @brief Records the walk just started of the directory `inode`, read as
+  ///        `entry` and admitted (see Admits); false when main has to wait for
+  ///        it instead.
+  auto Add(const std::optional<EntryOperand>& entry, ino_t inode) -> bool {
+    if (!entry.has_value()) {
       return false;
     }
     if (roots_.empty()) {
-      if (!ResolvesDownward(*parent)) {
+      const std::optional<FileId> directory =
+          ResolvesAbove(entry->parent, links_);
+      if (!directory) {
         return false;
       }
-      parent_ = *parent;
+      directory_ = *directory;
+      parent_.assign(entry->parent);
     }
     roots_.insert(inode);
     return true;
   }
 
   /// @brief Forgets the walks, once they are over.
-  auto Clear() noexcept -> void { roots_.clear(); }
+  auto Clear() noexcept -> void {
+    roots_.clear();
+    links_.clear();
+  }
 
  private:
-  std::string_view parent_;
+  /// @brief The directory the walked operands are entries of.
+  FileId directory_{};
+  /// @brief A name for it, as typed, known to resolve to it (see
+  ///        ResolvesAbove).
+  std::string parent_;
   /// @brief The walked directories, by inode alone: a match on another
   ///        device only costs a wait.
   std::unordered_set<ino_t> roots_;
+  /// @brief The symlinks followed to reach the directory, by any of the names
+  ///        admitted for it (see ResolvesAbove). Walks rebuild paths from
+  ///        those names, so removing one has to wait for them.
+  std::vector<FileId> links_;
 };
 
 }  // namespace
@@ -1078,19 +1253,27 @@ auto main(int argc, char** argv) -> int {
   for (std::size_t operand = 0; operand < operands.size(); ++operand) {
     const char* path = operands[operand];
     const ErrorSink report{.ordered = &ordered, .operand = operand};
-    const std::optional<std::string_view> parent = ParentAsTyped(path);
-    if (!walks.Admits(parent)) {
+    std::optional<EntryOperand> entry = AsEntry(path);
+    if (!walks.Admits(entry)) {
       finish_walks();
+    }
+    if (entry.has_value() && entry->trailing_slash &&
+        !IsRealDirectory(entry->entry)) {
+      // "l/" follows the symlink `l` to wherever it leads, which need not be
+      // an entry of the directory at all.
+      entry.reset();
+      if (walks.Running()) {
+        finish_walks();
+      }
     }
 
     // Removes the operand, or opens it when it is a directory to walk.
     struct stat path_stat;
     const auto remove_or_open = [&]() -> cutils::os::Fd {
       int status = cutils::os::lstat(path, &path_stat);
-      if (status == 0 && S_ISDIR(path_stat.st_mode) &&
-          walks.Walks(path_stat.st_ino)) {
-        // A directory being walked, named again: as rm would, finish that
-        // walk first and look again.
+      if (status == 0 && walks.Involve(path_stat)) {
+        // A directory being walked, named again, or a symlink on the way to
+        // one: as rm would, finish the walks first and look again.
         finish_walks();
         status = cutils::os::lstat(path, &path_stat);
       }
@@ -1152,7 +1335,7 @@ auto main(int argc, char** argv) -> int {
     // The walk runs on every worker; unless it cannot matter (see
     // ConcurrentWalks), it is over before the next operand is looked at.
     // -v's lines follow operand order only that way.
-    if (cli->options.verbose || !walks.Add(parent, path_stat.st_ino)) {
+    if (cli->options.verbose || !walks.Add(entry, path_stat.st_ino)) {
       finish_walks();
     }
   }
