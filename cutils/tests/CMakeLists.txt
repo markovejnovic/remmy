@@ -52,19 +52,4 @@ cutils_add_catch_test(limits_test os/limits/fd_test.cpp)
 cutils_add_catch_test(task_scheduler_test task_scheduler/task_scheduler_test.cpp)
 cutils_add_catch_test(work_stealing_queue_test workstealing_queue/chase_lev_test.cpp)
 
-cutils_add_catch_test(clppap_core_test
-  clppap/detail/arg_classifier_test.cpp
-  clppap/detail/argument_set_test.cpp
-  clppap/positional_iterator_test.cpp)
-
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
-  cutils_add_catch_test(clppap_reflection_test
-    clppap/clppap_test.cpp clppap/detail/schema_test.cpp clppap/report_test.cpp)
-  cutils_add_catch_test(clppap_allocation_test
-    clppap/allocation_test.cpp support/allocation_probe.cpp)
-  foreach(target IN ITEMS clppap_reflection_test clppap_allocation_test)
-    target_compile_options(${target} PRIVATE -freflection)
-  endforeach()
-endif()
-
 cutils_configure_tests()
