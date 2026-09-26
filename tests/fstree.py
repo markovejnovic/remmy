@@ -70,11 +70,13 @@ def build(root: Path, spec: Spec) -> Path:
     return root
 
 
-def deep_chain(root: Path, depth: int, name: str = "d", leaf_files: int = 1) -> int:
+def deep_chain(root: Path, depth: int, name: str = "d", leaf_files: int = 1, wide: int = 0) -> int:
     """Create ``root/name/name/...`` ``depth`` levels deep via dir fds.
 
-    Each level also gets ``leaf_files`` regular files. Returns the byte length
-    of the deepest path relative to ``root``'s parent.
+    Each level also gets ``leaf_files`` regular files, and the deepest one
+    ``wide`` directories ``s<i>``, each with directories ``t0`` to ``t2`` and a
+    file ``f``. Returns the byte length of the deepest path relative to
+    ``root``'s parent.
     """
     root.mkdir(parents=True, exist_ok=True)
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
@@ -87,6 +89,15 @@ def deep_chain(root: Path, depth: int, name: str = "d", leaf_files: int = 1) -> 
             for i in range(leaf_files):
                 f = os.open(f"f{i}", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd)
                 os.close(f)
+        for i in range(wide):
+            os.mkdir(f"s{i}", dir_fd=fd)
+            sub = os.open(f"s{i}", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+            try:
+                for j in range(3):
+                    os.mkdir(f"t{j}", dir_fd=sub)
+                os.close(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=sub))
+            finally:
+                os.close(sub)
     finally:
         os.close(fd)
     return len(os.fsencode(root.name)) + depth * (len(os.fsencode(name)) + 1)

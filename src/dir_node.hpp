@@ -49,6 +49,16 @@ struct DirNode {
   /// directory. It sits in the padding after `fd_`, so it costs no space.
   std::atomic<bool> unsearchable_{false};
 
+  /// @brief Whether the walk of the directory is over and only its removal
+  ///        is left, parked until a descriptor frees up: a directory deeper
+  ///        than PATH_MAX is removed from its parent, which takes one.
+  ///
+  /// Set by the worker that dropped the last reference to the directory,
+  /// before it parks it, and read by the one that takes it back up, which
+  /// the scheduler's queues order after it. It sits in the padding after
+  /// `fd_` too.
+  bool removal_parked_ = false;
+
   //// @brief Pointer to the parent DirNode.
   ///
   /// When the file descriptor limit is completely exhausted, we walk up the

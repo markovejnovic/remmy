@@ -151,6 +151,26 @@ def test_tree_deeper_than_path_max_under_fd_limit(run: Runner, workdir: Path) ->
         assert fstree.listing(workdir) == set()
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("fd_limit", [12, 64])
+def test_wide_tree_deeper_than_path_max_under_fd_limit(
+    run: Runner, workdir: Path, fd_limit: int, threads: int
+) -> None:
+    """Siblings past PATH_MAX, opened ahead of their walk, hold descriptors
+    while another's removal needs one to reach its parent: that removal waits
+    for one, as an open does, rather than fail with EMFILE."""
+    name = "n" * 50
+    depth = (PATH_MAX + 512) // (len(name) + 1)
+    fstree.deep_chain(workdir / "t", depth=depth, name=name, leaf_files=0, wide=300)
+
+    res = run("-r", "t", threads=threads, fd_limit=fd_limit)
+
+    with check:
+        assert (res.returncode, res.stderr) == (0, ""), res
+    with check:
+        assert fstree.listing(workdir) == set()
+
+
 def test_max_length_names_at_every_level(run: Runner, workdir: Path) -> None:
     long = "L" * 255
     fstree.deep_chain(workdir / "t", depth=3, name=long, leaf_files=3)

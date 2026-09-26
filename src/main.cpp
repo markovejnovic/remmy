@@ -549,6 +549,13 @@ class FileUnlinkWorker {
   /// This function is called by the scheduler periodically as new tasks are
   /// admitted into the scheduler.
   void Process(DirNode* task, auto& ctx) noexcept {
+    if (task->removal_parked_) {
+      // Walked already; only its removal waited for a descriptor.
+      task->removal_parked_ = false;
+      RemoveWalked(task, ctx);
+      return;
+    }
+
     auto open_result = task->Open(path_buffer_, RootOf(task));
     if (!open_result) {
       const cutils::os::OpenError err = open_result.error();
@@ -565,24 +572,35 @@ class FileUnlinkWorker {
         DirNode* parent = task->parent_;
         const int error = static_cast<int>(err.code);
         const char* path = task->PathInto(path_buffer_);
+        // A directory deeper than PATH_MAX needs a descriptor to be looked
+        // up or removed; without one, all of this is tried again later.
+        bool retry = false;
         const int lookup =
-            error == ENOENT || error == EACCES ? Lookup(task, path) : 0;
+            error == ENOENT || error == EACCES ? Lookup(task, path, retry) : 0;
         // Gone, as in Vanished.
         const bool vanished = error == ENOENT && lookup == ENOENT;
+        if (retry) {
+          ctx.Submit(task, kAwaitingDescriptor);
+          return;
+        }
         if (error == EACCES && lookup == EACCES && parent != nullptr) {
           // Parked straight from the listing of its parent, which then never
           // got to look a name up (see Unsearchable).
           LeaveUnsearchable(parent);
         } else if (!vanished &&
-                   (!force_ ||
-                    !DirGone(LogRemoval(RemoveDir(task, path), path)))) {
+                   (!force_ || !DirGone(LogRemoval(
+                                   RemoveDir(task, path, retry), path)))) {
+          if (retry) {
+            ctx.Submit(task, kAwaitingDescriptor);
+            return;
+          }
           failures_++;
           ReportError(To(task), path, error);
         }
         const std::uint32_t operand = task->operand_;
         delete task;
         if (parent != nullptr) {
-          MaybeCleanupDirNode(parent);
+          MaybeCleanupDirNode(parent, ctx);
         } else {
           ordered_->Finish(operand);
         }
@@ -602,7 +620,7 @@ class FileUnlinkWorker {
       task->fd_.Close();
     }
 
-    MaybeCleanupDirNode(task);
+    MaybeCleanupDirNode(task, ctx);
   }
 
  private:
@@ -622,7 +640,13 @@ class FileUnlinkWorker {
   }
 
   /// @brief rmdir(2)s `node`, whose diagnostics print `path`.
-  auto RemoveDir(const DirNode* node, const char* path) noexcept -> int {
+  ///
+  /// A directory deeper than PATH_MAX is removed from the directory it is an
+  /// entry of, which is opened for it (see OpenDeepParent). When no
+  /// descriptor was left for that open, but one will be freed, this fails
+  /// with `retry` set, for the caller to park `node`.
+  auto RemoveDir(const DirNode* node, const char* path, bool& retry) noexcept
+      -> int {
     const cutils::os::Fd* root = RootOf(node);
     const int status =
         root == nullptr
@@ -632,16 +656,17 @@ class FileUnlinkWorker {
     if (status == 0 || errno != ENAMETOOLONG || node->parent_ == nullptr) {
       return status;
     }
-    // Deeper than PATH_MAX: from the directory it is an entry of.
-    const auto parent = OpenDeepParent(node);
+    const auto parent = OpenDeepParent(node, retry);
     return parent ? cutils::os::unlinkat(*parent, node->name_.c_str(),
                                          AT_REMOVEDIR)
                   : -1;
   }
 
   /// @brief Looks `node`, whose diagnostics print `path`, up without
-  ///        following it: 0 when that works, or else errno.
-  auto Lookup(const DirNode* node, const char* path) noexcept -> int {
+  ///        following it: 0 when that works, or else errno. `retry` is as in
+  ///        RemoveDir.
+  auto Lookup(const DirNode* node, const char* path, bool& retry) noexcept
+      -> int {
     const cutils::os::Fd* root = RootOf(node);
     struct stat node_stat;
     int status =
@@ -650,7 +675,7 @@ class FileUnlinkWorker {
             : cutils::os::fstatat(*root, node->PathInto(relative_buffer_, "."),
                                   &node_stat, AT_SYMLINK_NOFOLLOW);
     if (status != 0 && errno == ENAMETOOLONG && node->parent_ != nullptr) {
-      const auto parent = OpenDeepParent(node);
+      const auto parent = OpenDeepParent(node, retry);
       status = parent ? cutils::os::fstatat(*parent, node->name_.c_str(),
                                             &node_stat, AT_SYMLINK_NOFOLLOW)
                       : -1;
@@ -659,11 +684,14 @@ class FileUnlinkWorker {
   }
 
   /// @brief The directory `node`, too deep to reach by its path, is an entry
-  ///        of (see DirNode::OpenParent), or none with errno set.
-  auto OpenDeepParent(const DirNode* node) noexcept
+  ///        of (see DirNode::OpenParent), or none with errno set, and with
+  ///        `retry` set when that was for lack of a descriptor that will be
+  ///        freed.
+  auto OpenDeepParent(const DirNode* node, bool& retry) noexcept
       -> std::optional<cutils::os::Fd> {
     auto parent = node->OpenParent(relative_buffer_, RootOf(node));
     if (!parent) {
+      retry = parent.error().retryable;
       errno = static_cast<int>(parent.error().code);
       return std::nullopt;
     }
@@ -858,28 +886,40 @@ class FileUnlinkWorker {
 
   /// @brief Cleanup a DirNode if we need to.
   ///
-  /// This tries to delete a DirNode if there are no more DirNode's referencing
-  /// the given one. It cleans up its parents equivalently.
-  void MaybeCleanupDirNode(DirNode* node) noexcept {
-    auto chain = node->ParentsMut();
+  /// This drops a reference to a DirNode, and removes and deletes it (see
+  /// RemoveWalked) if there are no more DirNode's referencing it.
+  void MaybeCleanupDirNode(DirNode* node, auto& ctx) noexcept {
+    if (node->remaining_children_dirs_.fetch_sub(
+            1, std::memory_order_release) != 1) {
+      return;
+    }
+    std::atomic_thread_fence(std::memory_order_acquire);
+    RemoveWalked(node, ctx);
+  }
 
-    for (auto it = chain.begin(); it != chain.end();) {
-      DirNode* current = *it;
-      ++it;
-
-      if (current->remaining_children_dirs_.fetch_sub(
-              1, std::memory_order_release) != 1) {
-        return;
-      }
-      std::atomic_thread_fence(std::memory_order_acquire);
-
-      const bool root = current->parent_ == nullptr;
+  /// @brief Removes and deletes `node`, which nothing references any more,
+  ///        then drops its reference to its parent, and so on up the chain
+  ///        for as long as that was the last one.
+  ///
+  /// A directory whose removal needs a descriptor there is none of (see
+  /// RemoveDir) is parked, still referenced by its parent, and taken back up
+  /// here by Process once one may have been freed.
+  void RemoveWalked(DirNode* node, auto& ctx) noexcept {
+    for (DirNode* current = node;;) {
+      DirNode* const parent = current->parent_;
       if (!current->unsearchable_.load(std::memory_order_relaxed)) {
         // rm reports an operand that is gone by the time it is removed (a
         // walk through "l/" can remove the link l), unless under -f.
         const char* path = current->PathInto(path_buffer_);
-        if (LogRemoval(RemoveDir(current, path), path) != 0 &&
-            (errno != ENOENT || (root && !force_))) {
+        bool retry = false;
+        const int status = RemoveDir(current, path, retry);
+        if (retry) {
+          current->removal_parked_ = true;
+          ctx.Submit(current, kAwaitingDescriptor);
+          return;
+        }
+        if (LogRemoval(status, path) != 0 &&
+            (errno != ENOENT || (parent == nullptr && !force_))) {
           failures_++;
           ReportError(To(current), path, errno);
         }
@@ -887,10 +927,18 @@ class FileUnlinkWorker {
 
       const std::uint32_t operand = current->operand_;
       delete current;
-      if (root) {
+      if (parent == nullptr) {
         // The operand's walk is over.
         ordered_->Finish(operand);
+        return;
       }
+
+      if (parent->remaining_children_dirs_.fetch_sub(
+              1, std::memory_order_release) != 1) {
+        return;
+      }
+      std::atomic_thread_fence(std::memory_order_acquire);
+      current = parent;
     }
   }
 };
