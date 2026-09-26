@@ -82,11 +82,17 @@ struct DirNode {
   /// This also acts as the refcount which keeps the DirNode alive in memory.
   std::atomic<std::uint32_t> remaining_children_dirs_;
 
-  explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name)
+  /// @brief The index of the operand whose walk found this directory, which
+  ///        its diagnostics are ordered by.
+  std::uint32_t operand_;
+
+  explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name,
+                   std::uint32_t operand)
       : fd_(std::move(fd)),
         parent_(parent),
         name_(std::move(name)),
-        remaining_children_dirs_(1) {}
+        remaining_children_dirs_(1),
+        operand_(operand) {}
 
   /// @brief Walk the parent chain to build the full absolute path into the
   ///        given output buffer.
