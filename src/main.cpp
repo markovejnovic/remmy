@@ -615,12 +615,18 @@ class FileUnlinkWorker {
       Scan(task, ctx);
     }
     // A root the walk reaches its directories through stays open until it
-    // is removed.
-    if (task->parent_ != nullptr || !roots_[task->operand_].relative) {
+    // is removed. A directory too deep to remove by its path keeps its
+    // descriptor for as long as it could be the last one to let go of
+    // itself: it is then removed from its "..", as are its ancestors after
+    // it (see RemoveDirFrom), rather than through its path in pieces.
+    cutils::os::Fd kept;
+    if (task->parent_ != nullptr && task->TooLongForPath()) {
+      kept = std::move(task->fd_);
+    } else if (task->parent_ != nullptr || !roots_[task->operand_].relative) {
       task->fd_.Close();
     }
 
-    MaybeCleanupDirNode(task, ctx);
+    MaybeCleanupDirNode(task, ctx, std::move(kept));
   }
 
  private:
@@ -642,11 +648,12 @@ class FileUnlinkWorker {
   /// @brief rmdir(2)s `node`, whose diagnostics print `path`.
   ///
   /// A directory deeper than PATH_MAX is removed from the directory it is an
-  /// entry of, which is opened for it (see OpenDeepParent). When no
-  /// descriptor was left for that open, but one will be freed, this fails
-  /// with `retry` set, for the caller to park `node`.
-  auto RemoveDir(const DirNode* node, const char* path, bool& retry) noexcept
-      -> int {
+  /// entry of, which is opened for it (see OpenDeepParent) and, when `up` is
+  /// given, handed back in it for the removal of that one next (see
+  /// RemoveWalked). When no descriptor was left for that open, but one will
+  /// be freed, this fails with `retry` set, for the caller to park `node`.
+  auto RemoveDir(const DirNode* node, const char* path, bool& retry,
+                 cutils::os::Fd* up = nullptr) noexcept -> int {
     const cutils::os::Fd* root = RootOf(node);
     const int status =
         root == nullptr
@@ -656,10 +663,18 @@ class FileUnlinkWorker {
     if (status == 0 || errno != ENAMETOOLONG || node->parent_ == nullptr) {
       return status;
     }
-    const auto parent = OpenDeepParent(node, retry);
-    return parent ? cutils::os::unlinkat(*parent, node->name_.c_str(),
-                                         AT_REMOVEDIR)
-                  : -1;
+    auto parent = OpenDeepParent(node, retry);
+    if (!parent) {
+      return -1;
+    }
+    const int removed =
+        cutils::os::unlinkat(*parent, node->name_.c_str(), AT_REMOVEDIR);
+    if (up != nullptr) {
+      const int error = errno;
+      *up = *std::move(parent);
+      errno = error;
+    }
+    return removed;
   }
 
   /// @brief Looks `node`, whose diagnostics print `path`, up without
@@ -696,6 +711,29 @@ class FileUnlinkWorker {
       return std::nullopt;
     }
     return *std::move(parent);
+  }
+
+  /// @brief rmdir(2)s `node` as RemoveDir does, but from `dir`, when that is
+  ///        open on `node`: from `node`'s "..", which is left in `dir` for
+  ///        the removal of the parent of `node` next.
+  ///
+  /// This is how a chain of directories deeper than PATH_MAX is removed
+  /// bottom up once the first of them has been reached from the top (see
+  /// RemoveDir): one open per directory, not one per PATH_MAX of its path.
+  /// The root is left to RemoveDir, as it is removed by its name as typed.
+  auto RemoveDirFrom(cutils::os::Fd& dir, const DirNode* node,
+                     const char* path, bool& retry) noexcept -> int {
+    if (dir.IsOpen() && node->parent_ != nullptr) {
+      auto parent = cutils::os::openat(
+          dir, "..", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      dir.Close();
+      if (parent) {
+        dir = *std::move(parent);
+        return cutils::os::unlinkat(dir, node->name_.c_str(), AT_REMOVEDIR);
+      }
+    }
+    dir.Close();
+    return RemoveDir(node, path, retry, &dir);
   }
 
   /// @brief Whether the entry `name` of `task`, which the listing of `task`
@@ -888,13 +926,17 @@ class FileUnlinkWorker {
   ///
   /// This drops a reference to a DirNode, and removes and deletes it (see
   /// RemoveWalked) if there are no more DirNode's referencing it.
-  void MaybeCleanupDirNode(DirNode* node, auto& ctx) noexcept {
+  ///
+  /// @param dir When open, a descriptor of `node` to remove it from (see
+  ///            RemoveDirFrom); closed when that is not up to this call.
+  void MaybeCleanupDirNode(DirNode* node, auto& ctx,
+                           cutils::os::Fd dir = {}) noexcept {
     if (node->remaining_children_dirs_.fetch_sub(
             1, std::memory_order_release) != 1) {
       return;
     }
     std::atomic_thread_fence(std::memory_order_acquire);
-    RemoveWalked(node, ctx);
+    RemoveWalked(node, ctx, std::move(dir));
   }
 
   /// @brief Removes and deletes `node`, which nothing references any more,
@@ -904,7 +946,11 @@ class FileUnlinkWorker {
   /// A directory whose removal needs a descriptor there is none of (see
   /// RemoveDir) is parked, still referenced by its parent, and taken back up
   /// here by Process once one may have been freed.
-  void RemoveWalked(DirNode* node, auto& ctx) noexcept {
+  ///
+  /// @param dir As in MaybeCleanupDirNode. From then on, open on `current`
+  ///            when a removal below it reached it.
+  void RemoveWalked(DirNode* node, auto& ctx,
+                    cutils::os::Fd dir = {}) noexcept {
     for (DirNode* current = node;;) {
       DirNode* const parent = current->parent_;
       if (!current->unsearchable_.load(std::memory_order_relaxed)) {
@@ -912,7 +958,7 @@ class FileUnlinkWorker {
         // walk through "l/" can remove the link l), unless under -f.
         const char* path = current->PathInto(path_buffer_);
         bool retry = false;
-        const int status = RemoveDir(current, path, retry);
+        const int status = RemoveDirFrom(dir, current, path, retry);
         if (retry) {
           current->removal_parked_ = true;
           ctx.Submit(current, kAwaitingDescriptor);
@@ -923,6 +969,8 @@ class FileUnlinkWorker {
           failures_++;
           ReportError(To(current), path, errno);
         }
+      } else {
+        dir.Close();
       }
 
       const std::uint32_t operand = current->operand_;
