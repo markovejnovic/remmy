@@ -84,29 +84,7 @@ def mark_known_gaps(items: list[pytest.Item]) -> None:
         item.add_marker(pytest.mark.xfail(strict=strict, reason=f"parity {kind} {slug!r} (see parity_gaps.py)"))
 
 
-_OPERAND_ORDER = frozenset(
-    {
-        "test_rm_parity_edges.py::test_cwd_and_dot_shapes[rm_cwd_abs_then_dot]",
-        "test_rm_parity_fs.py::test_recursion_and_order[duplicate_dir_operands_r]",
-        "test_rm_parity_fs.py::test_recursion_and_order[overlap_parent_then_child]",
-        "test_rm_parity_fs.py::test_recursion_and_order[rv_mixed_operands_fail]",
-    }
-)
-
 GAPS: dict[str, Gap] = {
-    "operand-order": Gap(
-        reason=(
-            "Operands are handled strictly in order: an operand, including a directory's whole walk, is finished "
-            "before the next one is looked at, so later operands see earlier removals ('rm -rv d d' reports 'd: "
-            "No such file or directory') and output of different operands never interleaves. remmy walks a "
-            "directory operand while it goes on with the next operands and walks all directories together. "
-            "Parallelism inside one walk is unaffected. Until then the outcome of these cases depends on thread "
-            "timing (a walk runs while later operands are looked at, and may finish first), so they are all "
-            "timing dependent; the fix must delete them all, and with them this gap."
-        ),
-        cases=_OPERAND_ORDER,
-        timing_dependent=_OPERAND_ORDER,
-    ),
     "walk-semantics": Gap(
         reason=(
             "fts(3) behaviour inside a walk: a directory that can be listed but not searched (0444) is reported "

@@ -7,10 +7,13 @@
 ///
 /// The general algorithm is here described.
 ///
-/// The program starts off in single-threaded mode. For all positional paths
-/// given in the input CLI, this program stats them, and, if it is a file,
-/// deletes it. If the path is a directory, however, this program opens the
-/// directory and emplaces the new open FD in a multi-threaded scheduler.
+/// The program starts off in single-threaded mode. It takes the positional
+/// paths given in the input CLI one at a time, in order, and stats each: if it
+/// is a file, it deletes it. If the path is a directory, however, this program
+/// opens the directory and emplaces the new open FD in a multi-threaded
+/// scheduler. As rm does, it then waits for the whole tree to be removed
+/// before it looks at the next path, unless that cannot make a difference
+/// (sibling directories, as in `rm -rf dir/*`, are walked together).
 ///
 /// This is where the fun begins. The multi-threaded scheduler schedules a
 /// worker for each available thread. The total number of threads remmy uses is
@@ -52,6 +55,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -71,6 +75,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -128,9 +133,10 @@ auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
 ///
 /// The workers share it under a lock. A path is added after its removal
 /// succeeded, and a directory is only removed once its contents are, so a
-/// directory's line follows those of its contents. The order among entries of
-/// one directory, sibling subtrees and operands, which remmy removes in
-/// parallel, can differ from rm's.
+/// directory's line follows those of its contents, and an operand's lines
+/// follow those of the operands before it. The order among entries of one
+/// directory and sibling subtrees, which remmy removes in parallel, can differ
+/// from rm's.
 ///
 /// Whatever is left is written out on destruction. Write failures are ignored,
 /// as rm ignores them. Without -v there is no log: the workers hold a null
@@ -348,29 +354,96 @@ class EscapedPath {
   std::string escaped_;
 };
 
+/// @brief Puts each operand's diagnostics on stderr only once those of the
+///        operands before it are out, so that stderr reads as if the operands
+///        were removed one after another, as rm removes them, while walks of
+///        several operands run at once (see ConcurrentWalks).
+///
+/// The first operand not yet finished writes straight through; the others'
+/// diagnostics are held until it is their turn. Only failures and operand
+/// ends come here, so the lock is off the removal path.
+class OrderedStderr {
+ public:
+  explicit OrderedStderr(std::size_t operands)
+      : held_(operands), finished_(operands, false) {}
+
+  /// @brief Writes the pieces, one diagnostic of `operand`, or holds them
+  ///        back while an earlier operand is not finished.
+  auto Write(std::size_t operand,
+             std::initializer_list<std::string_view> pieces) noexcept -> void {
+    const std::lock_guard lock(mutex_);
+    if (operand == next_) {
+      WriteStderr(pieces);
+      return;
+    }
+    for (const std::string_view piece : pieces) {
+      held_[operand].append(piece);
+    }
+  }
+
+  /// @brief Marks `operand` as done with, which writes out what the operands
+  ///        after it held back, up to the next one not done.
+  auto Finish(std::size_t operand) noexcept -> void {
+    const std::lock_guard lock(mutex_);
+    finished_[operand] = true;
+    while (next_ < finished_.size() && finished_[next_]) {
+      ++next_;
+      if (next_ < held_.size() && !held_[next_].empty()) {
+        WriteStderr({held_[next_]});
+        std::string().swap(held_[next_]);
+      }
+    }
+  }
+
+ private:
+  std::mutex mutex_;
+  /// @brief The first operand not finished yet.
+  std::size_t next_ = 0;
+  std::vector<std::string> held_;
+  std::vector<bool> finished_;
+};
+
+/// @brief Where an operand's diagnostics go: in operand order through an
+///        OrderedStderr, or, without one, straight to stderr.
+struct ErrorSink {
+  OrderedStderr* ordered = nullptr;
+  std::size_t operand = 0;
+
+  auto operator()(std::initializer_list<std::string_view> pieces) const noexcept
+      -> void {
+    if (ordered != nullptr) {
+      ordered->Write(operand, pieces);
+    } else {
+      WriteStderr(pieces);
+    }
+  }
+};
+
 /// @brief Reports a failure the way BSD rm's warn(3) does:
 ///        "<prog>: <path>: <strerror>", with `path` escaped (see EscapedPath).
-auto ReportError(std::string_view path, int error) noexcept -> void {
+auto ReportError(const ErrorSink& to, std::string_view path, int error) noexcept
+    -> void {
   const ErrorText text(error);
   const EscapedPath shown(path);
-  WriteStderr({ProgramName(), ": ", shown.View(), ": ", text.View(), "\n"});
+  to({ProgramName(), ": ", shown.View(), ": ", text.View(), "\n"});
 }
 
 /// @brief ReportError for the entry `name` of the directory at `dir`, which is
 ///        the path fts(3) gives rm for it.
-auto ReportError(std::string_view dir, std::string_view name,
-                 int error) noexcept -> void {
+auto ReportError(const ErrorSink& to, std::string_view dir,
+                 std::string_view name, int error) noexcept -> void {
   const ErrorText text(error);
   const std::array<EscapedPath, 2> shown{EscapedPath(dir), EscapedPath(name)};
-  WriteStderr({ProgramName(), ": ", shown[0].View(), "/", shown[1].View(), ": ",
-               text.View(), "\n"});
+  to({ProgramName(), ": ", shown[0].View(), "/", shown[1].View(), ": ",
+      text.View(), "\n"});
 }
 
 /// @brief Refuses a directory operand removed without -r, -R or -d, in rm's
 ///        own words, not strerror(EISDIR)'s "Is a directory".
-auto ReportIsDirectory(std::string_view path) noexcept -> void {
+auto ReportIsDirectory(const ErrorSink& to, std::string_view path) noexcept
+    -> void {
   const EscapedPath shown(path);
-  WriteStderr({ProgramName(), ": ", shown.View(), ": is a directory\n"});
+  to({ProgramName(), ": ", shown.View(), ": is a directory\n"});
 }
 
 /// @brief Whether an operand's failure is one to report: -f silences a missing
@@ -432,6 +505,10 @@ class FileUnlinkWorker {
   /// @brief -v: where removed paths go; null without -v.
   RemovedLog* removed_ = nullptr;
 
+  /// @brief Where diagnostics go, in operand order; told when an operand's
+  ///        walk is over.
+  OrderedStderr* ordered_ = nullptr;
+
   /// @brief Thread-local buffer holding the path of the directory being
   ///        scanned, for -v's lines about its entries.
   std::string scan_path_;
@@ -456,12 +533,15 @@ class FileUnlinkWorker {
         const char* path = task->PathInto(path_buffer_);
         if (!force_ || !DirGone(LogRemoval(cutils::os::rmdir(path), path))) {
           failures_++;
-          ReportError(path, static_cast<int>(err.code));
+          ReportError(To(task), path, static_cast<int>(err.code));
         }
         DirNode* parent = task->parent_;
+        const std::uint32_t operand = task->operand_;
         delete task;
         if (parent != nullptr) {
           MaybeCleanupDirNode(parent);
+        } else {
+          ordered_->Finish(operand);
         }
       }
 
@@ -484,7 +564,7 @@ class FileUnlinkWorker {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
         failures_++;
-        ReportError(task->PathInto(path_buffer_),
+        ReportError(To(task), task->PathInto(path_buffer_),
                     static_cast<int>(read.error()));
         break;
       }
@@ -502,7 +582,8 @@ class FileUnlinkWorker {
                                 AT_SYMLINK_NOFOLLOW) != 0) {
           if (errno != ENOENT) {
             failures_++;
-            ReportError(task->PathInto(path_buffer_), entry.name(), errno);
+            ReportError(To(task), task->PathInto(path_buffer_), entry.name(),
+                        errno);
           }
           continue;
         }
@@ -516,7 +597,8 @@ class FileUnlinkWorker {
           }
         } else if (errno != ENOENT) {
           failures_++;
-          ReportError(task->PathInto(path_buffer_), entry.name(), errno);
+          ReportError(To(task), task->PathInto(path_buffer_), entry.name(),
+                      errno);
         }
         continue;
       }
@@ -535,7 +617,7 @@ class FileUnlinkWorker {
                   cutils::os::unlinkat(task->fd_, entry.c_str(), AT_REMOVEDIR),
                   dir_path, entry.name()))) {
             failures_++;
-            ReportError(task->PathInto(path_buffer_), entry.name(),
+            ReportError(To(task), task->PathInto(path_buffer_), entry.name(),
                         static_cast<int>(opened.error().code));
           }
           continue;
@@ -546,8 +628,8 @@ class FileUnlinkWorker {
       // steal and finish it the instant Submit returns, and the parent's own
       // scan reference (held until Finish, below) keeps
       // `remaining_children_dirs_` from reaching zero mid-scan regardless.
-      auto* child =
-          new DirNode(std::move(child_fd), task, std::string{entry.name()});
+      auto* child = new DirNode(std::move(child_fd), task,
+                                std::string{entry.name()}, task->operand_);
       task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
       const std::size_t tier =
           child->fd_.IsOpen() ? kRunnable : kAwaitingDescriptor;
@@ -557,6 +639,11 @@ class FileUnlinkWorker {
       // node is freed by whichever worker drops its last reference in Finish.
       ctx.Submit(child, tier);
     }
+  }
+
+  /// @brief Where diagnostics about `node` go.
+  [[nodiscard]] auto To(const DirNode* node) const noexcept -> ErrorSink {
+    return {.ordered = ordered_, .operand = node->operand_};
   }
 
   /// @brief Passes a removal's `status` through, logging the removed path
@@ -602,10 +689,16 @@ class FileUnlinkWorker {
       const char* path = current->PathInto(path_buffer_);
       if (LogRemoval(cutils::os::rmdir(path), path) != 0 && errno != ENOENT) {
         failures_++;
-        ReportError(path, errno);
+        ReportError(To(current), path, errno);
       }
 
+      const bool root = current->parent_ == nullptr;
+      const std::uint32_t operand = current->operand_;
       delete current;
+      if (root) {
+        // The operand's walk is over.
+        ordered_->Finish(operand);
+      }
     }
   }
 };
@@ -717,17 +810,18 @@ auto RunUnlink(std::string_view argv0, std::span<char* const> args) noexcept
     return ReportUsage(argv0, remmy::UsageError{});
   }
 
+  const ErrorSink to_stderr;
   struct stat path_stat;
   if (cutils::os::lstat(path, &path_stat) != 0) {
-    ReportError(path, errno);
+    ReportError(to_stderr, path, errno);
     return 1;
   }
   if (S_ISDIR(path_stat.st_mode)) {
-    ReportIsDirectory(path);
+    ReportIsDirectory(to_stderr, path);
     return 1;
   }
   if (cutils::os::unlink(path) != 0) {
-    ReportError(path, errno);
+    ReportError(to_stderr, path, errno);
     return 1;
   }
   return 0;
@@ -794,13 +888,300 @@ auto ReportUnsupported(std::string_view argv0, char option) noexcept -> int {
   return 1;
 }
 
-auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
-    -> void {
-  auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
+/// @brief Starts the walk of operand number `operand`, the directory `path`
+///        open on `dirfd`; false when it could not be started.
+auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path,
+              std::size_t operand) -> bool {
+  auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path},
+                           static_cast<std::uint32_t>(operand));
   if (!scheduler.Submit(task)) {
     delete task;
+    return false;
   }
+  return true;
 }
+
+/// @brief An operand read as an entry of a directory.
+struct EntryOperand {
+  /// @brief The directory, as typed: "" for the working directory ("a"), "/"
+  ///        for the root ("/a"), `P` for "P/a".
+  std::string_view parent;
+  /// @brief The operand without its trailing slashes.
+  std::string_view entry;
+  /// @brief Whether the operand ended in slashes, which follow a symlink.
+  bool trailing_slash;
+};
+
+/// @brief `path` read as an entry of a directory, or none when its last
+///        component is "." or ".." or it has none at all ("/").
+constexpr auto AsEntry(std::string_view path) noexcept
+    -> std::optional<EntryOperand> {
+  std::string_view entry = path;
+  while (entry.size() > 1 && entry.back() == '/') {
+    entry.remove_suffix(1);
+  }
+  const std::size_t slash = entry.rfind('/');
+  const std::string_view name =
+      slash == std::string_view::npos ? entry : entry.substr(slash + 1);
+  if (name.empty() || name == "." || name == "..") {
+    return std::nullopt;
+  }
+  std::string_view parent;
+  if (slash != std::string_view::npos) {
+    parent = entry.substr(0, slash + 1);
+    while (parent.size() > 1 && parent.back() == '/') {
+      parent.remove_suffix(1);
+    }
+  }
+  return EntryOperand{.parent = parent,
+                      .entry = entry,
+                      .trailing_slash = entry.size() != path.size()};
+}
+
+/// @brief Whether `path` is a directory itself, not a symlink to one.
+auto IsRealDirectory(std::string_view path) -> bool {
+  const std::string terminated(path);
+  struct stat path_stat;
+  return cutils::os::lstat(terminated.c_str(), &path_stat) == 0 &&
+         S_ISDIR(path_stat.st_mode);
+}
+
+/// @brief A file, by identity.
+struct FileId {
+  dev_t device;
+  ino_t inode;
+
+  auto operator==(const FileId&) const -> bool = default;
+};
+
+/// @brief The identity of the directory open on `dir`.
+auto IdOf(const cutils::os::Fd& dir) noexcept -> std::optional<FileId> {
+  struct stat dir_stat;
+  if (cutils::os::fstatat(dir, ".", &dir_stat, 0) != 0) {
+    return std::nullopt;
+  }
+  return FileId{.device = dir_stat.st_dev, .inode = dir_stat.st_ino};
+}
+
+/// @brief The directory `parent` (see EntryOperand) resolves to, provided that
+///        removing the trees under that directory's entries cannot change
+///        what it resolves to.
+///
+/// It follows `parent` the way the kernel resolves it, component by component,
+/// symlinks, "." and ".." included, and keeps every directory it looks a name
+/// up in. It then rejects `parent` if one of those lies below the directory
+/// it resolved to: inside one of its entries, where a walk of that entry would
+/// remove it. Directories above it, which `/tmp` -> `private/tmp` passes
+/// through, are out of reach of those walks. Anything it cannot follow (an
+/// unreadable directory, a symlink loop) is rejected too.
+///
+/// The symlinks it follows are added to `links`: removing one of them would
+/// change what `parent` resolves to.
+auto ResolvesAbove(std::string_view parent, std::vector<FileId>& links)
+    -> std::optional<FileId> {
+  constexpr int kOpenDir = O_RDONLY | O_DIRECTORY | O_CLOEXEC;
+  // MAXSYMLINKS: where the kernel gives up with ELOOP.
+  constexpr int kMaxLinks = 32;
+  // Past this depth, a directory tree is not worth reasoning about.
+  constexpr int kMaxDepth = 1024;
+
+  std::vector<cutils::os::Fd> visited;
+  const auto enter_root = [&visited](bool absolute) -> bool {
+    auto dir = cutils::os::open(absolute ? "/" : ".", kOpenDir);
+    if (!dir) {
+      return false;
+    }
+    visited.push_back(*std::move(dir));
+    return true;
+  };
+
+  if (!enter_root(!parent.empty() && parent.front() == '/')) {
+    return std::nullopt;
+  }
+  std::string rest(parent);
+  std::size_t at = 0;
+  int followed = 0;
+  while (true) {
+    while (at < rest.size() && rest[at] == '/') {
+      ++at;
+    }
+    if (at == rest.size()) {
+      break;
+    }
+    const std::size_t end = std::min(rest.find('/', at), rest.size());
+    const std::string name = rest.substr(at, end - at);
+    at = end;
+    if (name == ".") {
+      continue;
+    }
+    const bool up = name == "..";
+    auto next = cutils::os::openat(visited.back(), name.c_str(),
+                                   up ? kOpenDir : kOpenDir | O_NOFOLLOW);
+    if (next) {
+      visited.push_back(*std::move(next));
+      continue;
+    }
+    // Not a directory to go into: follow it if it is a symlink.
+    std::array<char, PATH_MAX> target{};
+    const ssize_t length = ::readlinkat(visited.back().get(), name.c_str(),
+                                        target.data(), target.size());
+    struct stat link_stat;
+    if (up || length <= 0 || std::cmp_greater_equal(length, target.size()) ||
+        ++followed > kMaxLinks ||
+        cutils::os::fstatat(visited.back(), name.c_str(), &link_stat,
+                            AT_SYMLINK_NOFOLLOW) != 0) {
+      return std::nullopt;
+    }
+    links.push_back({.device = link_stat.st_dev, .inode = link_stat.st_ino});
+    const std::string_view link(target.data(),
+                                static_cast<std::size_t>(length));
+    rest = std::string(link) + "/" + rest.substr(at);
+    at = 0;
+    if (link.front() == '/' && !enter_root(true)) {
+      return std::nullopt;
+    }
+  }
+
+  const std::optional<FileId> resolved = IdOf(visited.back());
+  if (!resolved) {
+    return std::nullopt;
+  }
+  // Directories known to be out of reach: from `resolved` up to the root, and
+  // then those above the other visited directories.
+  std::vector<FileId> above;
+  // Whether `start` is out of reach: it climbs to the root, or to a directory
+  // already known out of reach, without passing `resolved`.
+  const auto out_of_reach = [&above, &resolved](const cutils::os::Fd& start) {
+    std::optional<FileId> id = IdOf(start);
+    cutils::os::Fd dir;
+    for (int depth = 0; id.has_value() && depth < kMaxDepth; ++depth) {
+      if (depth > 0 && *id == *resolved) {
+        return false;
+      }
+      if (std::ranges::contains(above, *id)) {
+        return true;
+      }
+      above.push_back(*id);
+      auto parent_dir =
+          cutils::os::openat(depth == 0 ? start : dir, "..", kOpenDir);
+      if (!parent_dir) {
+        return false;
+      }
+      const std::optional<FileId> parent_id = IdOf(*parent_dir);
+      if (parent_id == id) {
+        // The root is its own parent.
+        return true;
+      }
+      dir = *std::move(parent_dir);
+      id = parent_id;
+    }
+    return false;
+  };
+  if (!out_of_reach(visited.back())) {
+    return std::nullopt;
+  }
+  for (const cutils::os::Fd& dir : visited) {
+    if (!out_of_reach(dir)) {
+      return std::nullopt;
+    }
+  }
+  return resolved;
+}
+
+/// @brief The walks main leaves running while it goes on with later operands.
+///
+/// rm is done with an operand, its whole walk included, before it looks at the
+/// next one, and remmy removes them in that order too: a later operand may be
+/// the same directory, lie inside it, contain it or name a path through it.
+/// Only where none of that can happen does main go on while a walk runs, so
+/// that many directory operands (`rm -rf dir/*`, `rm -rf */`) are still walked
+/// together: when the walked operands and the next one are entries of one
+/// directory, named through paths that resolve to it without passing below it
+/// (see ResolvesAbove), removing one of them cannot change what another's path
+/// leads to. A next operand that is one of the walked directories under
+/// another name ("d" and "D" on a case-insensitive volume) or a symlink on the
+/// way to them still waits, and so does one with a trailing slash that is not
+/// a directory itself (a symlink, which the slash follows). OrderedStderr keeps
+/// the diagnostics in operand order meanwhile.
+class ConcurrentWalks {
+ public:
+  /// @brief Whether a walk is running.
+  [[nodiscard]] auto Running() const noexcept -> bool {
+    return !roots_.empty();
+  }
+
+  /// @brief Whether an operand, read as `entry`, may be looked at while the
+  ///        walks run.
+  [[nodiscard]] auto Admits(const std::optional<EntryOperand>& entry) -> bool {
+    if (roots_.empty()) {
+      return true;
+    }
+    if (!entry.has_value()) {
+      return false;
+    }
+    if (entry->parent == parent_) {
+      return true;
+    }
+    if (ResolvesAbove(entry->parent, links_) != directory_) {
+      return false;
+    }
+    parent_.assign(entry->parent);
+    return true;
+  }
+
+  /// @brief Whether the running walks depend on the file `path_stat` is
+  ///        about: it is the root of one of them, or a symlink the path to
+  ///        their roots goes through.
+  [[nodiscard]] auto Involve(const struct stat& path_stat) const noexcept
+      -> bool {
+    if (S_ISDIR(path_stat.st_mode)) {
+      return roots_.contains(path_stat.st_ino);
+    }
+    return S_ISLNK(path_stat.st_mode) &&
+           std::ranges::contains(links_, FileId{.device = path_stat.st_dev,
+                                                .inode = path_stat.st_ino});
+  }
+
+  /// @brief Records the walk just started of the directory `inode`, read as
+  ///        `entry` and admitted (see Admits); false when main has to wait for
+  ///        it instead.
+  auto Add(const std::optional<EntryOperand>& entry, ino_t inode) -> bool {
+    if (!entry.has_value()) {
+      return false;
+    }
+    if (roots_.empty()) {
+      const std::optional<FileId> directory =
+          ResolvesAbove(entry->parent, links_);
+      if (!directory) {
+        return false;
+      }
+      directory_ = *directory;
+      parent_.assign(entry->parent);
+    }
+    roots_.insert(inode);
+    return true;
+  }
+
+  /// @brief Forgets the walks, once they are over.
+  auto Clear() noexcept -> void {
+    roots_.clear();
+    links_.clear();
+  }
+
+ private:
+  /// @brief The directory the walked operands are entries of.
+  FileId directory_{};
+  /// @brief A name for it, as typed, known to resolve to it (see
+  ///        ResolvesAbove).
+  std::string parent_;
+  /// @brief The walked directories, by inode alone: a match on another
+  ///        device only costs a wait.
+  std::unordered_set<ino_t> roots_;
+  /// @brief The symlinks followed to reach the directory, by any of the names
+  ///        admitted for it (see ResolvesAbove). Walks rebuild paths from
+  ///        those names, so removing one has to wait for them.
+  std::vector<FileId> links_;
+};
 
 }  // namespace
 
@@ -852,66 +1233,120 @@ auto main(int argc, char** argv) -> int {
     return status;
   };
 
+  // Declared before the scheduler, so it outlives the workers holding it.
+  OrderedStderr ordered(operands.size());
+
   const std::uint16_t threads = ThreadCount();
   FileUnlinkWorker prototype;
   prototype.force_ = force;
   prototype.removed_ = removed ? &*removed : nullptr;
+  prototype.ordered_ = &ordered;
   Scheduler scheduler(threads, prototype);
 
+  ConcurrentWalks walks;
+  const auto finish_walks = [&scheduler, &walks] {
+    scheduler.Drain();
+    walks.Clear();
+  };
+
   std::size_t failures = guarded.refused ? 1 : 0;
-  for (const char* path : operands) {
-    struct stat path_stat;
-    if (cutils::os::lstat(path, &path_stat) != 0) {
-      if (const int error = errno; StatFailureReportable(cli->options, error)) {
-        ReportError(path, error);
-        ++failures;
+  for (std::size_t operand = 0; operand < operands.size(); ++operand) {
+    const char* path = operands[operand];
+    const ErrorSink report{.ordered = &ordered, .operand = operand};
+    std::optional<EntryOperand> entry = AsEntry(path);
+    if (!walks.Admits(entry)) {
+      finish_walks();
+    }
+    if (entry.has_value() && entry->trailing_slash &&
+        !IsRealDirectory(entry->entry)) {
+      // "l/" follows the symlink `l` to wherever it leads, which need not be
+      // an entry of the directory at all.
+      entry.reset();
+      if (walks.Running()) {
+        finish_walks();
       }
-      continue;
     }
 
-    if (!S_ISDIR(path_stat.st_mode)) {
-      if (log_removed(cutils::os::unlink(path), path) != 0) {
-        if (const int error = errno; Reportable(force, error)) {
-          ReportError(path, error);
+    // Removes the operand, or opens it when it is a directory to walk.
+    struct stat path_stat;
+    const auto remove_or_open = [&]() -> cutils::os::Fd {
+      int status = cutils::os::lstat(path, &path_stat);
+      if (status == 0 && walks.Involve(path_stat)) {
+        // A directory being walked, named again, or a symlink on the way to
+        // one: as rm would, finish the walks first and look again.
+        finish_walks();
+        status = cutils::os::lstat(path, &path_stat);
+      }
+      if (status != 0) {
+        if (const int error = errno;
+            StatFailureReportable(cli->options, error)) {
+          ReportError(report, path, error);
           ++failures;
         }
+        return {};
       }
-      continue;
-    }
 
-    if (!cli->options.recursive) {
-      if (cli->options.dir) {
-        // -d: rmdir(2) the operand as given, so "l/" removes the link's
-        // target and "//" fails with EISDIR, and report errno like unlink.
-        if (log_removed(cutils::os::rmdir(path), path) != 0) {
+      if (!S_ISDIR(path_stat.st_mode)) {
+        if (log_removed(cutils::os::unlink(path), path) != 0) {
           if (const int error = errno; Reportable(force, error)) {
-            ReportError(path, error);
+            ReportError(report, path, error);
             ++failures;
           }
         }
-        continue;
+        return {};
       }
-      ReportIsDirectory(path);
-      ++failures;
-      continue;
-    }
 
-    auto dirfd =
-        cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (!dirfd) {
-      // As in the walk: under -f, rm removes an unreadable empty directory.
-      if (!force || !DirGone(log_removed(cutils::os::rmdir(path), path))) {
-        ReportError(path, static_cast<int>(dirfd.error().code));
+      if (!cli->options.recursive) {
+        if (cli->options.dir) {
+          // -d: rmdir(2) the operand as given, so "l/" removes the link's
+          // target and "//" fails with EISDIR, and report errno like unlink.
+          if (log_removed(cutils::os::rmdir(path), path) != 0) {
+            if (const int error = errno; Reportable(force, error)) {
+              ReportError(report, path, error);
+              ++failures;
+            }
+          }
+          return {};
+        }
+        ReportIsDirectory(report, path);
         ++failures;
+        return {};
       }
+
+      constexpr int kOpenRoot = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+      auto dirfd = cutils::os::open(path, kOpenRoot);
+      if (!dirfd && dirfd.error().retryable && walks.Running()) {
+        // Out of descriptors, which the running walks hold: rm would be done
+        // with them by now, so finish them and try again.
+        finish_walks();
+        dirfd = cutils::os::open(path, kOpenRoot);
+      }
+      if (!dirfd) {
+        // As in the walk: under -f, rm removes an unreadable empty directory.
+        if (!force || !DirGone(log_removed(cutils::os::rmdir(path), path))) {
+          ReportError(report, path, static_cast<int>(dirfd.error().code));
+          ++failures;
+        }
+        return {};
+      }
+      return *std::move(dirfd);
+    };
+
+    cutils::os::Fd dirfd = remove_or_open();
+    if (!dirfd.IsOpen() ||
+        !SeedRoot(scheduler, std::move(dirfd), path, operand)) {
+      ordered.Finish(operand);
       continue;
     }
-
-    // Seeding precedes Run, so this is still single-threaded.
-    SeedRoot(scheduler, *std::move(dirfd), path);
+    // The walk runs on every worker; unless it cannot matter (see
+    // ConcurrentWalks), it is over before the next operand is looked at.
+    // -v's lines follow operand order only that way.
+    if (cli->options.verbose || !walks.Add(entry, path_stat.st_ino)) {
+      finish_walks();
+    }
   }
 
-  (void)scheduler.Wait();
+  scheduler.Wait();
 
   for (const auto& worker : scheduler.Workers()) {
     failures += worker.failures_;
