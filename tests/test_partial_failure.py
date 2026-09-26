@@ -65,6 +65,23 @@ def test_unwritable_subdirectory_keeps_its_files(run: Runner, workdir: Path, thr
         assert "t/frozen" in res.stderr
 
 
+def test_unwritable_large_directory_reports_every_file(run: Runner, workdir: Path, threads: int) -> None:
+    # Large enough that most unlinks run in batches on other workers.
+    count = 3_000
+    fstree.build(workdir, {"t": {"frozen": {f"f{i}": "" for i in range(count)}, "gone": {"x": ""}}})
+
+    with fstree.chmod(workdir / "t/frozen", 0o555):
+        res = run("-r", "t", threads=threads)
+
+    with check:
+        assert res.returncode == 1, res
+    left = fstree.listing(workdir)
+    with check:
+        assert {"t", "t/frozen"} | {f"t/frozen/f{i}" for i in range(count)} == left
+    with check:
+        assert sum("t/frozen/f" in line for line in res.errors) == count, res
+
+
 def test_failure_deep_in_tree_preserves_exact_ancestor_chain(run: Runner, workdir: Path, threads: int) -> None:
     fstree.build(
         workdir,
