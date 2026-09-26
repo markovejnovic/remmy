@@ -43,10 +43,11 @@ struct DirNode {
   ///        but not searched, so none of its entries could be removed, and rm
   ///        reports it once and does not try to rmdir it.
   ///
-  /// Set by the worker that scans the directory, read by whichever worker
-  /// drops its last reference (see `remaining_children_dirs_`). It sits in
-  /// the padding after `fd_`, so it costs no space.
-  bool unsearchable_ = false;
+  /// Set by the worker that scans the directory, or by one that fails to open
+  /// a child of it, and read by whichever worker drops its last reference
+  /// (see `remaining_children_dirs_`). Whoever sets it first reports the
+  /// directory. It sits in the padding after `fd_`, so it costs no space.
+  std::atomic<bool> unsearchable_{false};
 
   //// @brief Pointer to the parent DirNode.
   ///

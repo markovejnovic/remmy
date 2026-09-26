@@ -559,15 +559,23 @@ class FileUnlinkWorker {
       } else {
         // Like the inline openat failure in Scan: report the directory and
         // leave it be (-f first tries rmdir, as rm does), or, when it is
-        // gone, pass over it. It was never scanned, so nothing references
-        // it; only its parent's count of it is dropped.
+        // gone, pass over it, or, when its parent cannot be searched, report
+        // that instead. It was never scanned, so nothing references it; only
+        // its parent's count of it is dropped.
         DirNode* parent = task->parent_;
         const int error = static_cast<int>(err.code);
         const char* path = task->PathInto(path_buffer_);
+        const int lookup =
+            error == ENOENT || error == EACCES ? Lookup(task, path) : 0;
         // Gone, as in Vanished.
-        const bool vanished = error == ENOENT && Lookup(task, path) == ENOENT;
-        if (!vanished &&
-            (!force_ || !DirGone(LogRemoval(RemoveDir(task, path), path)))) {
+        const bool vanished = error == ENOENT && lookup == ENOENT;
+        if (error == EACCES && lookup == EACCES && parent != nullptr) {
+          // Parked straight from the listing of its parent, which then never
+          // got to look a name up (see Unsearchable).
+          LeaveUnsearchable(parent);
+        } else if (!vanished &&
+                   (!force_ ||
+                    !DirGone(LogRemoval(RemoveDir(task, path), path)))) {
           failures_++;
           ReportError(To(task), path, error);
         }
@@ -683,7 +691,9 @@ class FileUnlinkWorker {
   ///        search: once, as "<dir>: Permission denied", and without
   ///        removing it (see DirNode::unsearchable_).
   auto LeaveUnsearchable(DirNode* task) noexcept -> void {
-    task->unsearchable_ = true;
+    if (task->unsearchable_.exchange(true, std::memory_order_relaxed)) {
+      return;
+    }
     failures_++;
     ReportError(To(task), task->PathInto(path_buffer_), EACCES);
   }
@@ -838,7 +848,7 @@ class FileUnlinkWorker {
       std::atomic_thread_fence(std::memory_order_acquire);
 
       const bool root = current->parent_ == nullptr;
-      if (!current->unsearchable_) {
+      if (!current->unsearchable_.load(std::memory_order_relaxed)) {
         // rm reports an operand that is gone by the time it is removed (a
         // walk through "l/" can remove the link l), unless under -f.
         const char* path = current->PathInto(path_buffer_);
