@@ -153,9 +153,7 @@ def test_tree_deeper_than_path_max_under_fd_limit(run: Runner, workdir: Path) ->
 
 @pytest.mark.slow
 @pytest.mark.parametrize("fd_limit", [12, 64])
-def test_wide_tree_deeper_than_path_max_under_fd_limit(
-    run: Runner, workdir: Path, fd_limit: int, threads: int
-) -> None:
+def test_wide_tree_deeper_than_path_max_under_fd_limit(run: Runner, workdir: Path, fd_limit: int, threads: int) -> None:
     """Siblings past PATH_MAX, opened ahead of their walk, hold descriptors
     while another's removal needs one to reach its parent: that removal waits
     for one, as an open does, rather than fail with EMFILE."""
