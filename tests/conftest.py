@@ -17,7 +17,6 @@ import fstree
 import pytest
 from harness import Result, Runner, run_remmy
 from hypothesis import HealthCheck, settings
-from parity import AT_PARITY, NOT_YET_AT_PARITY
 
 # Each example spawns processes and builds trees: no per-example deadline.
 settings.register_profile("default", max_examples=60, deadline=None, suppress_health_check=[HealthCheck.too_slow])
@@ -110,10 +109,10 @@ def _summary(title: str, only_left: Iterable[object], only_right: Iterable[objec
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Expect every parity case to fail unless ``AT_PARITY`` says remmy passes it."""
-    for item in items:
-        if item.get_closest_marker("parity") and f"{item.path.name}::{item.name}" not in AT_PARITY:
-            item.add_marker(NOT_YET_AT_PARITY)
+    """Mark the parity cases remmy is known to fail as strict xfails (see ``parity_gaps``)."""
+    import parity_gaps
+
+    parity_gaps.mark_known_gaps(items)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

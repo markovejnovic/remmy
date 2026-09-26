@@ -12,7 +12,8 @@ unlink-mode shapes, raw names in ``-v`` output and in errors inside a tree,
 Every case was first run against ``/bin/rm`` by hand and its output checked;
 the test itself compares against ``/bin/rm`` live (see ``parity``).
 
-remmy is not expected to pass these yet: they spell out what full parity means.
+The cases remmy does not pass yet are listed in ``parity_gaps`` and run as strict
+xfails.
 """
 
 from __future__ import annotations
