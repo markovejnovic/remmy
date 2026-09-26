@@ -23,8 +23,6 @@ FILESYSTEMS = (
     "Case-sensitive APFS",
     "HFS+",
     "Case-sensitive HFS+",
-    "ExFAT",
-    "MS-DOS FAT32",
 )
 
 
