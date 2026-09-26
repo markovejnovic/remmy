@@ -112,9 +112,9 @@ jobs:
       - run: cmake --build --preset ${{ matrix.preset }}
       # Runs the pytest end-to-end suite (tests/) against the built executable.
       # Parity checks output bytes, not build-type behaviour: release covers it.
-      - run: ctest --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }} -V
         env:
-          PYTEST_ADDOPTS: ${{ matrix.preset == 'debug' && '-m "not parity"' || '' }}
+          PYTEST_ADDOPTS: ${{ matrix.preset == 'debug' && '-m "not parity" -v --durations=60' || '-v --durations=60' }}
 
   # Linux runs GCC from Homebrew too: the presets name g++-16, and the runner's
   # non-root user keeps the permission tests meaningful.
