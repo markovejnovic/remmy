@@ -21,12 +21,13 @@ env:
 jobs:
   format:
     name: clang-format
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: brew install clang-format
+      - uses: astral-sh/setup-uv@v6
+      # Pinned wheel: the same formatter on every runner, without Homebrew.
       - name: Check formatting
-        run: git ls-files '*.c' '*.h' '*.cpp' '*.hpp' | xargs clang-format --style=file --dry-run --Werror
+        run: git ls-files '*.c' '*.h' '*.cpp' '*.hpp' | xargs uvx clang-format==22.1.8 --style=file --dry-run --Werror
 
   ruff:
     name: ruff
@@ -63,22 +64,30 @@ jobs:
           - name: gcc asan
             cxx: g++-16
             tsan: "OFF"
+            brew: gcc ninja
           # Clang adds integer, bounds and nullability checks.
           - name: clang asan
             cxx: clang++
             tsan: "OFF"
+            brew: llvm ninja
           - name: clang tsan
             cxx: clang++
             tsan: "ON"
+            brew: llvm ninja
     steps:
       - uses: actions/checkout@v4
-      - run: brew install gcc llvm ninja
+      - run: brew install ${{ matrix.brew }}
       - name: Put Homebrew LLVM first on PATH
+        if: contains(matrix.brew, 'llvm')
         run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: cutils-macos-${{ matrix.name }}
       - name: Configure
         run: >
           cmake -S cutils -B build/cutils -G Ninja
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DCUTILS_TEST_TSAN=${{ matrix.tsan }}
       - run: cmake --build build/cutils
       - run: ctest --test-dir build/cutils --output-on-failure
@@ -96,10 +105,16 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: cmake --preset ${{ matrix.preset }}
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: remmy-macos-${{ matrix.preset }}
+      - run: cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - run: cmake --build --preset ${{ matrix.preset }}
       # Runs the pytest end-to-end suite (tests/) against the built executable.
+      # Parity checks output bytes, not build-type behaviour: release covers it.
       - run: ctest --preset ${{ matrix.preset }}
+        env:
+          PYTEST_ADDOPTS: ${{ matrix.preset == 'debug' && '-m "not parity"' || '' }}
 
   # Linux runs GCC from Homebrew too: the presets name g++-16, and the runner's
   # non-root user keeps the permission tests meaningful.
@@ -114,8 +129,13 @@ jobs:
       - name: Lower mmap randomisation for ASan
         run: sudo sysctl -w vm.mmap_rnd_bits=28
       - run: brew install gcc ninja
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: cutils-linux-gcc-asan
       - name: Configure
-        run: cmake -S cutils -B build/cutils -G Ninja -DCMAKE_CXX_COMPILER=g++-16
+        run: >
+          cmake -S cutils -B build/cutils -G Ninja -DCMAKE_CXX_COMPILER=g++-16
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - run: cmake --build build/cutils
       - run: ctest --test-dir build/cutils --output-on-failure
 
@@ -134,7 +154,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: cmake --preset ${{ matrix.preset }}
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: remmy-linux-${{ matrix.preset }}
+      - run: cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - run: cmake --build --preset ${{ matrix.preset }}
       # Runs the pytest end-to-end suite (tests/) against the built executable.
       - run: ctest --preset ${{ matrix.preset }}
