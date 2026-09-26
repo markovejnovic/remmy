@@ -41,6 +41,14 @@ def _rel(p: Path, root: Path) -> str:
     return os.path.relpath(p, os.path.realpath(root))
 
 
+_C_ESCAPES = {"\a": "\\a", "\b": "\\b", "\v": "\\v", "\f": "\\f", "\r": "\\r"}
+
+
+def _shown(rel: str) -> str:
+    """``rel`` as rm's diagnostics name it: C0 control bytes but TAB and LF escaped C style."""
+    return "".join(c if c in "\t\n" or ord(c) >= 0x20 else _C_ESCAPES.get(c, f"\\{ord(c):03o}") for c in rel)
+
+
 # --- Hard failures are reported, contained, and final ------------------------
 
 
@@ -382,7 +390,7 @@ def test_any_single_failure_is_contained_and_reported(
 
         survivors = fstree.listing(d)
         assert res.returncode == 1, res
-        assert rel in res.stderr, f"failing path {rel!r} not named\n{res}"
+        assert _shown(rel) in res.stderr, f"failing path {rel!r} not named\n{res}"
         assert survivors <= _allowed_survivors(inj, d), (
             f"collateral survivors: {sorted(survivors - _allowed_survivors(inj, d))}\n{res}"
         )

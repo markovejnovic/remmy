@@ -94,25 +94,6 @@ _OPERAND_ORDER = frozenset(
 )
 
 GAPS: dict[str, Gap] = {
-    "vis-escape": Gap(
-        reason=(
-            "Paths in error messages are escaped with vis(3) C style: C0 control bytes become \\a \\b \\v \\f \\r or "
-            "\\ooo (ESC is \\033), except TAB and LF, which stay raw like DEL and bytes >= 0x80. -v output and "
-            "prompts stay raw."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_edges.py::test_unlink_mode[unlink_escaped_name]",
-                "test_rm_parity_fs.py::test_names[control_bytes_missing_sweep]",
-                "test_rm_parity_fs.py::test_names[control_bytes_missing_sweep_C_locale]",
-                "test_rm_parity_fs.py::test_names[esc_name_dir_no_r]",
-                "test_rm_parity_fs.py::test_names[esc_name_in_0555_dir]",
-                "test_rm_parity_fs.py::test_names[esc_name_in_tree_perm]",
-                "test_rm_parity_fs.py::test_names[esc_name_trailing_slash]",
-                "test_rm_parity_fs.py::test_names[name_with_tab_esc]",
-            }
-        ),
-    ),
     "unlink-mode": Gap(
         reason=(
             "When basename(argv[0]) is 'unlink', rm acts as unlink(1): no options, a leading '--' is skipped only "
