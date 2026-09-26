@@ -10,6 +10,7 @@
 #include <expected>
 #include <iterator>
 #include <string>
+#include <string_view>
 
 namespace remmy {
 
@@ -37,6 +38,15 @@ struct DirNode {
   /// have a limit to how many directories can be open), then we have no choice
   /// but to not open the directory and just remember to open it later.
   cutils::os::Fd fd_;
+
+  /// @brief Whether the directory is to be left in place: it could be listed
+  ///        but not searched, so none of its entries could be removed, and rm
+  ///        reports it once and does not try to rmdir it.
+  ///
+  /// Set by the worker that scans the directory, read by whichever worker
+  /// drops its last reference (see `remaining_children_dirs_`). It sits in
+  /// the padding after `fd_`, so it costs no space.
+  bool unsearchable_ = false;
 
   //// @brief Pointer to the parent DirNode.
   ///
@@ -94,9 +104,14 @@ struct DirNode {
         remaining_children_dirs_(1),
         operand_(operand) {}
 
-  /// @brief Walk the parent chain to build the full absolute path into the
-  ///        given output buffer.
-  auto PathInto(std::string& out) const -> const char*;
+  /// @brief Walk the parent chain to build the full path into the given
+  ///        output buffer.
+  ///
+  /// @param root When not empty, stands in for the name of the root at the
+  ///             top of the chain: the path the walk reaches that directory
+  ///             by, when that is not the operand as typed.
+  auto PathInto(std::string& out, std::string_view root = {}) const
+      -> const char*;
 
   /// @brief Get a read-only range over this node and its ancestors.
   ///
@@ -110,11 +125,12 @@ struct DirNode {
 
   /// @brief Try to open this DirNode.
   ///
-  /// @param path_buf A scratch buffer which this utility uses to compute
-  ///                 an absolute path.
+  /// @param scratch A scratch buffer which this utility uses to compute
+  ///                the path to open.
+  /// @param root See PathInto.
   ///
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
-  auto Open(std::string& scratch) noexcept
+  auto Open(std::string& scratch, std::string_view root = {}) noexcept
       -> std::expected<void, cutils::os::OpenError>;
 };
 

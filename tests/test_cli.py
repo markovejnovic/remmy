@@ -135,7 +135,6 @@ def test_dot_slash_prefix_removes_dash_prefixed_names(run: Runner, workdir: Path
         (("-If", "f", "g", "h", "d"), "I"),
         (("-W", "f"), "W"),
         (("-fW", "f"), "W"),
-        (("-rx", "d"), "x"),
     ],
 )
 def test_unimplemented_safety_options_refuse_everything(

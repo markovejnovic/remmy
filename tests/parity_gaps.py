@@ -85,26 +85,6 @@ def mark_known_gaps(items: list[pytest.Item]) -> None:
 
 
 GAPS: dict[str, Gap] = {
-    "walk-semantics": Gap(
-        reason=(
-            "fts(3) behaviour inside a walk: a directory that can be listed but not searched (0444) is reported "
-            "once as '<dir>: Permission denied' and neither emptied nor rmdir'd; names a listing returns that "
-            "then vanish on open (the HFS+ private metadata directories at a volume root) are skipped silently, "
-            "so a mount point ends with only 'Resource busy'; an operand 'l/' with l pointing at '.' or '..' "
-            "walks through the link and reports the final rmdir's ENOENT."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_edges.py::test_mount_operands[r_mountpoint_operand]",
-                "test_rm_parity_edges.py::test_mount_operands[rx_empty_nested_mount]",
-                "test_rm_parity_edges.py::test_symlinks_to_directories[r_symlink_to_dot_slash]",
-                "test_rm_parity_edges.py::test_symlinks_to_directories[r_symlink_to_dotdot_slash]",
-                "test_rm_parity_fs.py::test_mount_points[mountpoint_r_no_x]",
-                "test_rm_parity_fs.py::test_mount_points[x_operand_is_mount]",
-                "test_rm_parity_fs.py::test_permissions[r_subdir_0444]",
-            }
-        ),
-    ),
     "deep-paths": Gap(
         reason=(
             "Trees deeper than PATH_MAX: remmy rmdirs directories by full path and gets ENAMETOOLONG, fts removes "
@@ -306,9 +286,7 @@ GAPS: dict[str, Gap] = {
         reason=(
             "-P still opens a regular file for writing before removing it, so an unwritable one fails with "
             "'Permission denied' even under -f; -W (without -r) undeletes instead of removing: an existing name "
-            "fails with 'File exists', a missing one with 'Operation not permitted', also under -f and -i; -x "
-            "does not descend into a directory on another device, so the mount point is left for rmdir to fail "
-            "with 'Resource busy'."
+            "fails with 'File exists', a missing one with 'Operation not permitted', also under -f and -i."
         ),
         cases=frozenset(
             {
@@ -326,7 +304,6 @@ GAPS: dict[str, Gap] = {
                 "test_rm_parity_edges.py::test_P_and_W[P_mode_000]",
                 "test_rm_parity_edges.py::test_P_and_W[iW_existing]",
                 "test_rm_parity_edges.py::test_P_and_W[iW_missing]",
-                "test_rm_parity_fs.py::test_mount_points[x_mountpoint_r]",
             }
         ),
     ),
@@ -338,6 +315,7 @@ _ORDERING_WALKED = frozenset(
     {
         "test_rm_parity_cli.py::test_P_W_x[P_r_tree]",
         "test_rm_parity_cli.py::test_P_W_x[rWv_dir]",
+        "test_rm_parity_cli.py::test_P_W_x[x_flag]",
         "test_rm_parity_cli.py::test_directories[Rv_tree]",
         "test_rm_parity_cli.py::test_directories[d_and_r_v]",
         "test_rm_parity_cli.py::test_directories[rfv_missing]",
@@ -360,10 +338,9 @@ _ORDERING_WALKED = frozenset(
     }
 )
 
-# Cases that use -i, -I or -x, which remmy refuses for now: they fail every time.
+# Cases that use -i or -I, which remmy refuses for now: they fail every time.
 _ORDERING_REFUSED = frozenset(
     {
-        "test_rm_parity_cli.py::test_P_W_x[x_flag]",
         "test_rm_parity_cli.py::test_interactive_i[ir_pty_all_y]",
         "test_rm_parity_cli.py::test_interactive_i[ir_trailing_slash]",
         "test_rm_parity_cli.py::test_interactive_i[ir_tree_all_y]",
@@ -386,7 +363,7 @@ DEFERRED: dict[str, Gap] = {
             "lines, -i prompts or errors of sibling entries where a subdirectory's output comes before a later "
             "sibling's. remmy removes sibling subdirectories in parallel and keeps doing so. Its order there "
             "depends on thread timing and matches rm's on some runs, so the cases remmy runs are timing "
-            "dependent; those with -i, -I or -x, which remmy still refuses, fail every time and stay strict."
+            "dependent; those with -i or -I, which remmy still refuses, fail every time and stay strict."
         ),
         cases=_ORDERING_WALKED | _ORDERING_REFUSED,
         timing_dependent=_ORDERING_WALKED,
