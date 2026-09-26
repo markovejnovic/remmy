@@ -131,9 +131,24 @@ struct DirNode {
   ///             is then taken relative to rather than to the operand as
   ///             typed.
   ///
-  /// If this succeeds, it guarantees [`fd_.IsOpen()`].
+  /// If this succeeds, it guarantees [`fd_.IsOpen()`]. A path longer than
+  /// PATH_MAX is opened through OpenParent.
   auto Open(std::string& scratch, const cutils::os::Fd* root = nullptr) noexcept
       -> std::expected<void, cutils::os::OpenError>;
+
+  /// @brief Open the directory this node is an entry of, by its path in
+  ///        pieces that each fit PATH_MAX, so that it can be reached however
+  ///        deep it lies, as fts(3) reaches it by chdir(2)ing down.
+  ///
+  /// Only for a node whose path is too long to use whole (ENAMETOOLONG): it
+  /// costs an open per PATH_MAX of path. Not for the root, which has no
+  /// parent.
+  ///
+  /// @param scratch A scratch buffer for the path.
+  /// @param root As in Open.
+  [[nodiscard]] auto OpenParent(std::string& scratch,
+                                const cutils::os::Fd* root = nullptr)
+      const noexcept -> std::expected<cutils::os::Fd, cutils::os::OpenError>;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the

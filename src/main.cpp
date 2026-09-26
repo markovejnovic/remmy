@@ -624,11 +624,19 @@ class FileUnlinkWorker {
   /// @brief rmdir(2)s `node`, whose diagnostics print `path`.
   auto RemoveDir(const DirNode* node, const char* path) noexcept -> int {
     const cutils::os::Fd* root = RootOf(node);
-    if (root == nullptr) {
-      return cutils::os::rmdir(path);
+    const int status =
+        root == nullptr
+            ? cutils::os::rmdir(path)
+            : cutils::os::unlinkat(*root, node->PathInto(relative_buffer_, "."),
+                                   AT_REMOVEDIR);
+    if (status == 0 || errno != ENAMETOOLONG || node->parent_ == nullptr) {
+      return status;
     }
-    return cutils::os::unlinkat(*root, node->PathInto(relative_buffer_, "."),
-                                AT_REMOVEDIR);
+    // Deeper than PATH_MAX: from the directory it is an entry of.
+    const auto parent = OpenDeepParent(node);
+    return parent ? cutils::os::unlinkat(*parent, node->name_.c_str(),
+                                         AT_REMOVEDIR)
+                  : -1;
   }
 
   /// @brief Looks `node`, whose diagnostics print `path`, up without
@@ -636,12 +644,30 @@ class FileUnlinkWorker {
   auto Lookup(const DirNode* node, const char* path) noexcept -> int {
     const cutils::os::Fd* root = RootOf(node);
     struct stat node_stat;
-    const int status =
+    int status =
         root == nullptr
             ? cutils::os::lstat(path, &node_stat)
             : cutils::os::fstatat(*root, node->PathInto(relative_buffer_, "."),
                                   &node_stat, AT_SYMLINK_NOFOLLOW);
+    if (status != 0 && errno == ENAMETOOLONG && node->parent_ != nullptr) {
+      const auto parent = OpenDeepParent(node);
+      status = parent ? cutils::os::fstatat(*parent, node->name_.c_str(),
+                                            &node_stat, AT_SYMLINK_NOFOLLOW)
+                      : -1;
+    }
     return status == 0 ? 0 : errno;
+  }
+
+  /// @brief The directory `node`, too deep to reach by its path, is an entry
+  ///        of (see DirNode::OpenParent), or none with errno set.
+  auto OpenDeepParent(const DirNode* node) noexcept
+      -> std::optional<cutils::os::Fd> {
+    auto parent = node->OpenParent(relative_buffer_, RootOf(node));
+    if (!parent) {
+      errno = static_cast<int>(parent.error().code);
+      return std::nullopt;
+    }
+    return *std::move(parent);
   }
 
   /// @brief Whether the entry `name` of `task`, which the listing of `task`
