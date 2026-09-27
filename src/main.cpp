@@ -109,22 +109,6 @@ auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
                           name, cutils::os::StrError(error));
 }
 
-/// @brief Whether an operand lstat(2) failed on with `error` is one to report.
-///
-/// Without -r or -R, -f silences only ENOENT. With either,
-/// BSD rm hands its operands to fts(3) and, under -f and for anyone but root
-/// (rm's `needstat`), passes over every operand fts could not stat without a
-/// word, whatever the error: a trailing slash on a file, a path through a file
-/// or an unsearchable directory, a symlink loop, a name that is too long. Root
-/// gets rm's needstat path, which again hides only ENOENT.
-auto StatFailureReportable(const remmy::Options& options, int error) noexcept
-    -> bool {
-  if (options.force && options.recursive && geteuid() != 0) {
-    return false;
-  }
-  return !options.force || error != ENOENT;
-}
-
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -428,7 +412,8 @@ auto main(int argc, char** argv) -> int {
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
       if (const int error = errno;
-          StatFailureReportable(cli->Options(), error)) {
+          !(force && cli->Options().recursive && cutils::os::GetEUid() != 0) &&
+          (!force || error != ENOENT)) {
         WarnAt(prog, path, error);
         ++failures;
       }
