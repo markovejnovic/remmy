@@ -103,7 +103,28 @@ worked at Bun for a brief period and I really know how annoying it is if tools
 aren't compatible with the standard. `remmy` prioritizes compatibility over
 performance.
 
-**If your `rm` and `remmy` output are not the same, yell at me.**
+**If your `rm` and `remmy` output are not the same and not documented here,
+yell at me.**
+
+### Known Incompatibilities
+
+> **Order preservation.**
+>
+> The order of deletion is not consistent with Apple `rm` in two ways:
+>
+>   - Passing `rm a a` results in:
+>
+>       1. `rm` deletes `a` without any problems.
+>       2. `rm` throws an error saying that `a` is not deleted.
+>
+>     `remmy` will try to delete the contents of `a` in two parallel threads.
+>     This results in very verbose messages. Implementing this correctly is
+>     very nontrivial and is tracked in
+>     [#27](https://github.com/markovejnovic/remmy/issues/27).
+>
+>  - When running `remmy -v`, the output order for which files are deleted does
+>    not follow DFS. This is because `remmy` is walking directories in
+>    parallel. This is **correct and expected behavior**.
 
 ## Performance
 
