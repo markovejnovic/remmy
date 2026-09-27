@@ -220,9 +220,11 @@ class DirEntries : public std::ranges::view_interface<DirEntries> {
 
   [[nodiscard]] auto CurrentEntry() const noexcept -> DirEntry {
     // Entries are packed and d_reclen-strided; sizeof(dirent) is the maximum,
-    // not the stride.
-    const auto* bytes = reinterpret_cast<const char*>(buffer_.data());
-    return DirEntry{reinterpret_cast<const RawDirent*>(bytes + offset_)};
+    // not the stride. The kernel pads d_reclen to the dirent's alignment, so
+    // every entry starts on a Word; stepping in Words keeps that alignment
+    // visible to -Wcast-align on strict-alignment targets.
+    const Word* entry = buffer_.data() + (offset_ / sizeof(Word));
+    return DirEntry{reinterpret_cast<const RawDirent*>(entry)};
   }
 
   [[nodiscard]] auto Current() const noexcept -> value_type {
