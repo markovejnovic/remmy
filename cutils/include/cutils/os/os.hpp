@@ -60,11 +60,7 @@ using RawDirent = ::dirent64;
   return Fd::Open([&] { return ::openat(dir.get(), name, flags); });
 }
 
-/// @brief The program's name as getprogname(3) gives it: the basename of the
-///        executed file (a symlink's own name), not argv[0].
-///
-/// glibc has no getprogname(3); there this is the basename of argv[0]. Empty
-/// when the name is not known.
+/// @brief The program's basename.
 [[nodiscard]] inline auto GetProgName() noexcept -> std::string_view {
 #if defined(__GLIBC__)
   const char* name = ::program_invocation_short_name;
