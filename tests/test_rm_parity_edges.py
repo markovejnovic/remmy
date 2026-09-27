@@ -1,5 +1,7 @@
 """BSD /bin/rm parity, part 3: edge cases the first two parts miss."""
 
+from dataclasses import replace
+
 from parity import *
 
 T = (File("a", "A"), File("b", "B"), Dir("d"), File("d/x", "X"), Dir("d/sub"), File("d/sub/y", "Y"))
@@ -10,6 +12,8 @@ PATH_PREFIX = "/".join(["abcdefghij"] * 92) + "/"  # 1012 bytes
 PATH_1023 = PATH_PREFIX + "x" * 11
 PATH_1024 = PATH_PREFIX + "x" * 12  # PATH_MAX counts the NUL, so this one is too long
 DX = (Dir("d"), File("d/x"))
+SELF_LINKED = (Dir("e"), Dir("e/a"), Dir("e/a/b"), Dir("e/c"), Dir("e/c/d"), File("e/f", "x"))
+WRAPPED = (Dir("w"), *(replace(e, path=f"w/{e.path}") for e in SELF_LINKED))
 
 
 test_cwd_and_dot_shapes = parity_test(
@@ -41,6 +45,9 @@ test_symlinks_to_directories = parity_test(
     # A link to '.' or '..' walks back into the tree that holds it.
     Case("r_symlink_to_dot_slash", "-rv l/", (Symlink("l", "."), File("a", "x"))),
     Case("r_symlink_to_dotdot_slash", "-rv d/l/", (Dir("d"), Symlink("d/l", ".."), File("a", "x"))),
+    # A symlink earlier in the path that the walk removes: rm is inside by then, so only the root's rmdir fails.
+    Case("r_symlink_to_dotdot_mid_path", "-r e/l/e", SELF_LINKED + (Symlink("e/l", ".."),)),
+    Case("r_symlink_to_dot_then_dotdot", "-r w/e/l/../e", WRAPPED + (Symlink("w/e/l", "."),)),
     Case("i_symlink_to_dir_nor", "-i l", LINKED, stdin=Y),
     Case("ir_symlink_to_dir_slash", "-irv l/", LINKED, stdin=pipe("y\n" * 6)),
 )
