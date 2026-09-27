@@ -108,23 +108,25 @@ yell at me.**
 
 ### Known Incompatibilities
 
-> **Order preservation.**
->
-> The order of deletion is not consistent with Apple `rm` in two ways:
->
->   - Passing `rm a a` results in:
->
->       1. `rm` deletes `a` without any problems.
->       2. `rm` throws an error saying that `a` is not deleted.
->
->     `remmy` will try to delete the contents of `a` in two parallel threads.
->     This results in very verbose messages. Implementing this correctly is
->     very nontrivial and is tracked in
->     [#27](https://github.com/markovejnovic/remmy/issues/27).
->
->  - When running `remmy -v`, the output order for which files are deleted does
->    not follow DFS. This is because `remmy` is walking directories in
->    parallel. This is **correct and expected behavior**.
+All known divergences between Apple's `rm` and `remmy` are documented here.
+
+#### Order preservation
+
+The order of deletion is not consistent with Apple `rm` in two ways:
+
+  - Passing `rm a a` results in:
+
+      1. `rm` deletes `a` without any problems.
+      2. `rm` throws an error saying that `a` is not deleted.
+
+    `remmy` will try to delete the contents of `a` in two parallel threads.
+    This results in very verbose messages. Implementing this correctly is
+    very nontrivial and is tracked in
+    [#27](https://github.com/markovejnovic/remmy/issues/27).
+
+  - When running `remmy -v`, the output order for which files are deleted does
+    not follow DFS. This is because `remmy` is walking directories in
+    parallel. This is **correct and expected behavior**.
 
 ## Performance
 
