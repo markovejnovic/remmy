@@ -13,6 +13,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cutils/os/fd.hpp>
 #include <expected>
@@ -57,6 +58,20 @@ using RawDirent = ::dirent64;
                                  int flags) noexcept
     -> std::expected<Fd, OpenError> {
   return Fd::Open([&] { return ::openat(dir.get(), name, flags); });
+}
+
+/// @brief The program's name as getprogname(3) gives it: the basename of the
+///        executed file (a symlink's own name), not argv[0].
+///
+/// glibc has no getprogname(3); there this is the basename of argv[0]. Empty
+/// when the name is not known.
+[[nodiscard]] inline auto getprogname() noexcept -> std::string_view {
+#if defined(__GLIBC__)
+  const char* name = ::program_invocation_short_name;
+#else
+  const char* name = ::getprogname();
+#endif
+  return name != nullptr ? name : "";
 }
 
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {

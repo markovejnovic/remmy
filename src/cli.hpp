@@ -7,6 +7,7 @@
 #include <expected>
 #include <optional>
 #include <span>
+#include <string_view>
 
 namespace remmy {
 
@@ -29,14 +30,7 @@ struct Options {
   bool one_file_system = false;  ///< -x: stay on the operands' devices.
 };
 
-/// @brief A parsed command line: the options and what follows them.
-struct Cli {
-  Options options;
-
-  /// @brief Arguments considered as operands, ie. all the things that aren't
-  ///        options as well as any things that come after `--`.
-  std::span<char* const> operands;
-};
+struct Cli;
 
 /// @brief A command line to answer with the usage and kExitUsage.
 struct UsageError {
@@ -80,14 +74,22 @@ struct Argv {
     return Span().empty() ? detail::kDefaultProgramName : Span()[0];
   }
 
-  /// @brief Parse the arguments the same way that BSD rm does.
-  auto Parse() const noexcept -> std::expected<Cli, UsageError>;
+  /// @brief The name rm's diagnostics start with: getprogname(3), the basename
+  ///        of the executed file, not argv[0] as ProgramName is. Falls back to
+  ///        argv[0]'s basename when the platform does not know it.
+  [[nodiscard]] auto ExecutableName() const noexcept -> std::string_view;
 
   /// @brief Try to parse the arguments, returning an error code if parsing
   ///        fails.
-  auto TryParseOrAbort() const noexcept -> std::expected<Cli, int>;
+  ///
+  /// Consumes the Argv: the Cli it returns owns it from then on, so a caller
+  /// has one command line to ask for names rather than two.
+  auto TryParseOrAbort() && noexcept -> std::expected<Cli, int>;
 
  private:
+  /// @brief Parse the arguments the same way that BSD rm does.
+  auto Parse() const noexcept -> std::expected<Cli, UsageError>;
+
   /// @brief Report the "usage: ..." message for a given error.
   void ReportUsage(UsageError error) const noexcept;
 
@@ -99,6 +101,44 @@ struct Argv {
   auto CheckUnsupported(Cli options) const noexcept -> std::expected<Cli, int>;
 
   std::span<char* const> span_;
+};
+
+/// @brief A parsed command line: the options, what follows them, and the
+///        command line they were parsed from.
+struct Cli {
+  constexpr Cli(remmy::Options options, std::span<char* const> operands,
+                Argv argv) noexcept
+      : options_(options), operands_(operands), argv_(argv) {}
+
+  /// @brief The options given.
+  [[nodiscard]] constexpr auto Options() const noexcept
+      -> const remmy::Options& {
+    return options_;
+  }
+
+  /// @brief Arguments considered as operands, ie. all the things that aren't
+  ///        options as well as any things that come after `--`.
+  [[nodiscard]] constexpr auto Operands() const noexcept
+      -> std::span<char* const> {
+    return operands_;
+  }
+
+  /// @brief See Argv::ProgramName.
+  [[nodiscard]] constexpr auto ProgramName() const -> const char* {
+    return argv_.ProgramName();
+  }
+
+  /// @brief See Argv::ExecutableName.
+  [[nodiscard]] auto ExecutableName() const noexcept -> std::string_view {
+    return argv_.ExecutableName();
+  }
+
+ private:
+  remmy::Options options_;
+  std::span<char* const> operands_;
+
+  /// @brief The command line this was parsed from.
+  Argv argv_;
 };
 
 }  // namespace remmy
