@@ -32,6 +32,9 @@ if(REMMY_ENABLE_CLANG_TIDY)
   set(CMAKE_CXX_CLANG_TIDY "${REMMY_CLANG_TIDY}")
 endif()
 
+option(REMMY_NATIVE "Tune Release builds for the build host's CPU" ON)
+option(REMMY_STATIC "Link remmy fully statically (Linux; macOS always links libSystem)" OFF)
+
 # Nothing here throws; keep exceptions off for every target, not per target.
 add_compile_options(-fno-exceptions)
 
@@ -46,6 +49,9 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_G
   # ld64 flag; ELF executables export nothing without -rdynamic anyway.
   target_link_options(remmy PRIVATE -static-libstdc++ -static-libgcc
     $<$<PLATFORM_ID:Darwin>:-Wl,-exported_symbol,_main>)
+  if(REMMY_STATIC AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(remmy PRIVATE -static)
+  endif()
   cutils_harden(remmy)
   # clang-tidy lints these sources in the Clang build below; it cannot take
   # the GCC-only flags this target compiles with.
@@ -80,13 +86,17 @@ endif()
 
 if(TARGET remmy)
   # Optimization flags must never bleed into Debug or sanitizer builds.
-  check_cxx_compiler_flag("-march=native" REMMY_HAS_MARCH_NATIVE)
-  if(REMMY_HAS_MARCH_NATIVE)
-    set(REMMY_NATIVE_FLAG -march=native)
-  else()
-    check_cxx_compiler_flag("-mcpu=native" REMMY_HAS_MCPU_NATIVE)
-    if(REMMY_HAS_MCPU_NATIVE)
-      set(REMMY_NATIVE_FLAG -mcpu=native)
+  # Redistributed binaries turn REMMY_NATIVE off: they run on other CPUs.
+  set(REMMY_NATIVE_FLAG)
+  if(REMMY_NATIVE)
+    check_cxx_compiler_flag("-march=native" REMMY_HAS_MARCH_NATIVE)
+    if(REMMY_HAS_MARCH_NATIVE)
+      set(REMMY_NATIVE_FLAG -march=native)
+    else()
+      check_cxx_compiler_flag("-mcpu=native" REMMY_HAS_MCPU_NATIVE)
+      if(REMMY_HAS_MCPU_NATIVE)
+        set(REMMY_NATIVE_FLAG -mcpu=native)
+      endif()
     endif()
   endif()
   check_ipo_supported(RESULT REMMY_IPO_OK OUTPUT REMMY_IPO_ERR)

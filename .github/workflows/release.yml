@@ -1,0 +1,353 @@
+name: Release
+
+# Pushing a v* tag builds every target, tests each binary and publishes a
+# GitHub release. A manual run builds and tests the same way but publishes
+# nothing; use it to check a commit before tagging it.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Two pushes of one tag must not publish over each other; never cancel a
+# release halfway through uploading.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Debian trixie with GCC 16 in /usr/local, for every Linux architecture.
+  # Pinned by digest so a re-run builds with the same toolchain.
+  GCC_IMAGE: gcc:16.2.0-trixie@sha256:ef558a40d1f13115293feee01526dbdb9aaad7c9c5a00da05f471ce042e855c1
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+
+jobs:
+  # Rejects a malformed tag before an hour of emulated builds, not after.
+  meta:
+    name: Check version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT" != push ]]; then
+            echo "version=0.0.0-dev+${SHA::12}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$REF_TYPE" != tag ]]; then
+            echo "::error::releases are published from tags, not $REF_TYPE $TAG"
+            exit 1
+          fi
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          if [[ ! "$TAG" =~ $semver ]]; then
+            echo "::error::tag '$TAG' is not vMAJOR.MINOR.PATCH[-PRERELEASE]"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([[ -n "${BASH_REMATCH[4]}" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  # Fully static against glibc: no NSS, iconv or dlopen is used, so the binary
+  # runs on any Linux distribution, musl-based ones included, and keeps glibc's
+  # allocator rather than musl's much slower one.
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.emulated && 150 || 45 }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+            machine: Advanced Micro Devices X86-64
+            emulated: false
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            machine: AArch64
+            emulated: false
+          # GitHub's arm64 runners have no AArch32 support: armv7 is emulated.
+          - arch: armv7l
+            runner: ubuntu-24.04
+            platform: linux/arm/v7
+            qemu: arm
+            machine: ARM
+            emulated: true
+          - arch: ppc64le
+            runner: ubuntu-24.04
+            platform: linux/ppc64le
+            qemu: ppc64le
+            machine: PowerPC64
+            emulated: true
+          - arch: s390x
+            runner: ubuntu-24.04
+            platform: linux/s390x
+            qemu: s390x
+            machine: IBM S/390
+            emulated: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Also registers binfmt handlers, so the host runs the foreign binary in
+      # the smoke test below directly.
+      - name: Set up QEMU
+        if: matrix.emulated
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: ${{ matrix.qemu }}
+
+      - name: Pull toolchain image
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          for attempt in 1 2 3; do
+            docker pull --platform "$PLATFORM" "$GCC_IMAGE" && exit 0
+            sleep $((attempt * 15))
+          done
+          exit 1
+
+      - name: Build
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          docker run --rm --platform "$PLATFORM" -v "$PWD:/src" -w /src "$GCC_IMAGE" \
+            bash -euxo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -o Acquire::Retries=5 update -qq
+              apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends cmake ninja-build
+              g++ --version
+              cmake --preset dist -DCMAKE_CXX_COMPILER=g++
+              cmake --build --preset dist
+              strip build/gcc-dist/remmy
+            '
+          mkdir -p dist
+          install -m 0755 build/gcc-dist/remmy dist/remmy
+
+      - name: Check the binary is static and for ${{ matrix.arch }}
+        env:
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          readelf -hW dist/remmy | tee header.txt
+          grep -qE "^ *Machine: +${MACHINE}\$" header.txt \
+            || { echo "::error::expected machine '$MACHINE'"; exit 1; }
+          if readelf -lW dist/remmy | grep -q INTERP; then
+            echo "::error::remmy has a program interpreter: it is not statically linked"
+            exit 1
+          fi
+          readelf -dW dist/remmy | grep -q "There is no dynamic section" \
+            || { echo "::error::remmy has a dynamic section"; readelf -dW dist/remmy; exit 1; }
+
+      - name: Smoke test
+        run: |
+          bin="$PWD/dist/remmy"
+          work="$(mktemp -d)"
+          cd "$work"
+          mkdir -p tree/a/b/c tree/d
+          touch tree/a/f tree/a/b/g tree/d/h
+          ln -s nowhere tree/a/dangling
+          "$bin" -rf tree
+          test ! -e tree
+          # Invoked as unlink(1) through a link named unlink.
+          ln -s "$bin" unlink
+          touch lone
+          ./unlink lone
+          test ! -e lone
+          # No operands is a usage error, as with BSD rm.
+          status=0
+          "$bin" 2> usage.txt || status=$?
+          test "$status" -eq 64
+          grep -q '^usage: rm' usage.txt
+
+      # Emulated targets stop at the smoke test: the suite times its runs and
+      # takes too long under QEMU.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        if: ${{ !matrix.emulated }}
+        with:
+          enable-cache: true
+      - name: End-to-end tests
+        if: ${{ !matrix.emulated }}
+        # Fault injection interposes libc with LD_PRELOAD, which a static
+        # binary never loads; CI covers it on the dynamic build.
+        run: >
+          uv run --locked pytest tests -p no:cacheprovider -n auto
+          --ignore=tests/test_faults.py
+          --remmy "$PWD/dist/remmy"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: remmy-Linux-${{ matrix.arch }}
+          path: dist/remmy
+          if-no-files-found: error
+          retention-days: 7
+
+  # macOS cannot link libSystem statically; libstdc++ and libgcc are linked
+  # statically, so the binary needs nothing beyond the OS itself. Homebrew ships
+  # no GCC for Intel Macs, so only arm64 is built.
+  macos:
+    name: macOS arm64
+    needs: meta
+    # The deployment target must match the macOS version Homebrew built GCC's
+    # static libstdc++ for, or its objects would ask for a newer OS than the
+    # binary claims to support.
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: brew install gcc ninja
+      - run: g++-16 --version
+      - run: cmake --preset dist
+      - name: Build
+        run: |
+          set -o pipefail
+          cmake --build --preset dist --verbose 2>&1 | tee build.log
+          if grep -q "built for newer macOS version" build.log; then
+            echo "::error::linked objects need a newer macOS than $MACOSX_DEPLOYMENT_TARGET"
+            exit 1
+          fi
+          strip build/gcc-dist/remmy
+          mkdir -p dist
+          install -m 0755 build/gcc-dist/remmy dist/remmy
+
+      - name: Check the binary is arm64 and needs only the OS
+        run: |
+          test "$(lipo -archs dist/remmy)" = arm64
+          otool -L dist/remmy
+          # Every dependency must ship with macOS, never a Homebrew dylib.
+          if otool -L dist/remmy | tail -n +2 | awk '{print $1}' | grep -vE '^/(usr/lib|System/Library)/'; then
+            echo "::error::remmy links a library outside the OS"
+            exit 1
+          fi
+          minos="$(otool -l dist/remmy | awk '/LC_BUILD_VERSION/ {f=1} f && $1 == "minos" {print $2; exit}')"
+          echo "minos: $minos"
+          test "$minos" = "$MACOSX_DEPLOYMENT_TARGET"
+
+      - name: Smoke test
+        run: |
+          bin="$PWD/dist/remmy"
+          work="$(mktemp -d)"
+          cd "$work"
+          mkdir -p tree/a/b/c tree/d
+          touch tree/a/f tree/a/b/g tree/d/h
+          ln -s nowhere tree/a/dangling
+          "$bin" -rf tree
+          test ! -e tree
+          ln -s "$bin" unlink
+          touch lone
+          ./unlink lone
+          test ! -e lone
+          status=0
+          "$bin" 2> usage.txt || status=$?
+          test "$status" -eq 64
+          grep -q '^usage: rm' usage.txt
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - name: End-to-end tests
+        # Parity's known gaps are pinned to the /bin/rm of the macOS CI runs
+        # on; this runner's rm differs. CI gates parity before a tag exists.
+        run: >
+          uv run --locked pytest tests -p no:cacheprovider -n auto
+          -m "not parity"
+          --remmy "$PWD/dist/remmy"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: remmy-Darwin-arm64
+          path: dist/remmy
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: [meta, linux, macos]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.meta.outputs.version }}
+      PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      # Asset names follow `uname -s`-`uname -m`, so an install script can
+      # build the download URL from uname alone.
+      TARGETS: >-
+        Linux-x86_64 Linux-aarch64 Linux-armv7l Linux-ppc64le Linux-s390x
+        Darwin-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: remmy-*
+          path: artifacts
+
+      # Artifacts drop the executable bit; tar restores it and fixes owners and
+      # times so the archives depend only on the tagged commit.
+      - name: Package
+        run: |
+          epoch="$(git log -1 --format=%ct)"
+          mkdir -p dist
+          for target in $TARGETS; do
+            bin="artifacts/remmy-$target/remmy"
+            test -f "$bin" || { echo "::error::missing build for $target"; exit 1; }
+            stage="stage/remmy-$target"
+            mkdir -p "$stage"
+            install -m 0755 "$bin" "$stage/remmy"
+            install -m 0644 LICENSE README.md "$stage/"
+            tar -C stage --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@$epoch" -cf - "remmy-$target" \
+              | gzip -9n > "dist/remmy-$target.tar.gz"
+          done
+          cd dist
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+
+      # Draft first, publish last: users never see a release with some of its
+      # assets missing. A re-run finishes an existing draft but never touches
+      # a release that was already published.
+      - name: Publish release
+        run: |
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$draft" != true ]]; then
+              echo "::error::release $TAG is already published; bump the version instead"
+              exit 1
+            fi
+          else
+            flags=()
+            [[ "$PRERELEASE" == true ]] && flags+=(--prerelease)
+            gh release create "$TAG" --draft --verify-tag --generate-notes \
+              --title "remmy $VERSION" "${flags[@]}"
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false
