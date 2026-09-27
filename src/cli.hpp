@@ -28,10 +28,7 @@ struct Options {
 struct Cli;
 struct UnlinkCli;
 
-/// @brief The error code to throw in case of a bad arg parsing.
-inline constexpr int kExitUsage = 64;
-
-/// @brief A command line to answer with the usage and kExitUsage.
+/// @brief The user did not use `rm` as expected.
 struct UsageError {
   explicit constexpr UsageError(char illegalOption)
       : illegalOption_(illegalOption) {}
