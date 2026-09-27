@@ -59,6 +59,7 @@
 #include <cutils/io/stderr_writer.hpp>
 #include <cutils/io/stdin_reader.hpp>
 #include <cutils/io/stdout_writer.hpp>
+#include <cutils/io/warn.hpp>
 #include <cutils/io/writer_ref.hpp>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
@@ -97,105 +98,18 @@ static auto ThreadCount() -> std::uint16_t {
   return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
 }
 
-/// @brief A path as rm's diagnostics print it: escaped C style, like vis(3)
-///        with VIS_CSTYLE | VIS_NOSLASH, but only for C0 control bytes.
-///
-/// \a \b \v \f and \r get their C names and every other control byte its
-/// three octal digits (ESC is \033), whatever the locale. TAB and LF stay raw,
-/// as do the backslash, DEL, bytes of 0x80 and above and so every multibyte
-/// character. Only diagnostics escape: -v's lines and prompts print paths raw.
-///
-/// A path with nothing to escape, the usual case, is viewed and not copied.
-class EscapedPath {
- public:
-  explicit EscapedPath(std::string_view path) noexcept : view_(path) {
-    if (std::ranges::none_of(path, NeedsEscape)) {
-      return;
-    }
-    static constexpr std::size_t kMaxEscapeLength = 4;
-    escaped_.reserve(path.size() * kMaxEscapeLength);
-    for (const char byte : path) {
-      Append(byte);
-    }
-    view_ = escaped_;
-  }
-
-  EscapedPath(const EscapedPath&) = delete;
-  auto operator=(const EscapedPath&) -> EscapedPath& = delete;
-  EscapedPath(EscapedPath&&) = delete;
-  auto operator=(EscapedPath&&) -> EscapedPath& = delete;
-  ~EscapedPath() = default;
-
-  [[nodiscard]] auto View() const noexcept -> std::string_view { return view_; }
-
- private:
-  static constexpr auto NeedsEscape(char byte) noexcept -> bool {
-    const auto value = static_cast<unsigned char>(byte);
-    return value < static_cast<unsigned char>(' ') && byte != '\t' &&
-           byte != '\n';
-  }
-
-  auto Append(char byte) noexcept -> void {
-    if (!NeedsEscape(byte)) {
-      escaped_.push_back(byte);
-      return;
-    }
-    escaped_.push_back('\\');
-    switch (byte) {
-      case '\a':
-        escaped_.push_back('a');
-        return;
-      case '\b':
-        escaped_.push_back('b');
-        return;
-      case '\v':
-        escaped_.push_back('v');
-        return;
-      case '\f':
-        escaped_.push_back('f');
-        return;
-      case '\r':
-        escaped_.push_back('r');
-        return;
-      default:
-        break;
-    }
-    // A control byte is below 040, so its first octal digit is 0.
-    static constexpr unsigned kOctalBits = 3;
-    static constexpr unsigned kOctalDigitMask = 07;
-    const auto value = static_cast<unsigned char>(byte);
-    escaped_.push_back('0');
-    escaped_.push_back(static_cast<char>('0' + (value >> kOctalBits)));
-    escaped_.push_back(static_cast<char>('0' + (value & kOctalDigitMask)));
-  }
-
-  std::string_view view_;
-  std::string escaped_;
-};
-
 /// @brief Report a failure the same way BSD rm's does.
 auto WarnAt(std::string_view prog, std::string_view path, int error) noexcept
     -> void {
-  std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: {}",
-                                    prog, EscapedPath(path).View(),
-                                    cutils::os::StrError(error));
-}
-
-/// @brief Refuses a directory operand removed without -r, -R or -d, in rm's
-///        own words, not strerror(EISDIR)'s "Is a directory".
-auto ReportIsDirectory(std::string_view prog, std::string_view path) noexcept
-    -> void {
   std::ignore =
-      cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: is a directory",
-                          prog, EscapedPath(path).View());
+      cutils::io::Warn(cutils::io::stderr_writer, prog, error, "{}", path);
 }
 
 /// @brief WarnAt for the entry `name` of the directory at `dir`.
 auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
             int error) noexcept -> void {
-  std::ignore = cutils::io::PrintLn(
-      cutils::io::stderr_writer, "{}: {}/{}: {}", prog, EscapedPath(dir).View(),
-      EscapedPath(name).View(), cutils::os::StrError(error));
+  std::ignore = cutils::io::Warn(cutils::io::stderr_writer, prog, error,
+                                 "{}/{}", dir, name);
 }
 
 template <class... Args>
@@ -496,7 +410,8 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
   }
 
   if (S_ISDIR(path_stat.st_mode)) {
-    ReportIsDirectory(prog, path);
+    std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
+                                    "{}: is a directory", path);
     return 1;
   }
 
@@ -571,7 +486,8 @@ auto RunRm(const remmy::Cli& cli) -> int {
         continue;
       }
 
-      ReportIsDirectory(prog, path);
+      std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
+                                      "{}: is a directory", path);
       ++failures;
       continue;
     }
