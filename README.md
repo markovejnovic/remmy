@@ -43,8 +43,7 @@ If you trust `remmy` enough, you can add an alias in your `.bashrc` to use
 `remmy` instead of `rm`:
 
 ```bash
-echo "alias rm='/opt/remmy/bin/rm'" >> ~/.bashrc
-echo "alias unlink='/opt/remmy/bin/unlink'" >> ~/.bashrc
+echo "alias rm='/usr/local/bin/remmy'" >> ~/.bashrc
 source ~/.bashrc
 ```
 
