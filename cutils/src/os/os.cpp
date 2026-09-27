@@ -12,7 +12,8 @@
 namespace cutils::os {
 namespace {
 
-[[nodiscard]] auto TakeStrError(int result, std::string& text) noexcept
+[[nodiscard, maybe_unused]] auto TakeStrError(int result,
+                                              std::string& text) noexcept
     -> std::optional<std::string_view> {
   if (result == ERANGE) {
     return std::nullopt;
@@ -22,7 +23,8 @@ namespace {
   return text;
 }
 
-[[nodiscard]] auto TakeStrError(const char* result, std::string& text) noexcept
+[[nodiscard, maybe_unused]] auto TakeStrError(const char* result,
+                                              std::string& text) noexcept
     -> std::optional<std::string_view> {
   if (result != text.data()) {
     return result;
