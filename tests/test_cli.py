@@ -156,7 +156,6 @@ def test_unimplemented_safety_options_refuse_everything(
     ("args", "left"),
     [
         (("-if", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
-        (("-i", "missing", "d"), {"f", "g", "d", "d/x", "d/sub", "d/sub/y"}),
         (("-I", "f", "g", "missing", "d"), {"d", "d/x", "d/sub", "d/sub/y"}),
         (("-I", "-r", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),
         (("-rW", "f"), {"g", "d", "d/x", "d/sub", "d/sub/y"}),

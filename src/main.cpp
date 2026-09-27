@@ -124,17 +124,17 @@ class ErrorText {
 
 /// @brief Reports a failure the way BSD rm's warn(3) does:
 ///        "<prog>: <path>: <strerror>", with `path` printed as given.
-auto ReportError(std::string_view prog, std::string_view path,
-                 int error) noexcept -> void {
+auto WarnAt(std::string_view prog, std::string_view path, int error) noexcept
+    -> void {
   const ErrorText text(error);
   std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: {}",
                                     prog, path, text.View());
 }
 
-/// @brief ReportError for the entry `name` of the directory at `dir`, which is
+/// @brief WarnAt for the entry `name` of the directory at `dir`, which is
 ///        the path fts(3) gives rm for it.
-auto ReportError(std::string_view prog, std::string_view dir,
-                 std::string_view name, int error) noexcept -> void {
+auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
+            int error) noexcept -> void {
   const ErrorText text(error);
   std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}/{}: {}",
                                     prog, dir, name, text.View());
@@ -152,10 +152,8 @@ class FileUnlinkWorker {
   static constexpr std::size_t kAwaitingDescriptor = 1;
   static constexpr std::size_t kRanks = 2;
 
-  /// @brief A worker removing what `cli` asks for.
-  ///
-  /// `cli` must outlive the worker; main's does, as the scheduler joins its
-  /// workers before main returns.
+  /// @brief Create a worker.
+  /// @note Cli must outlive the worker.
   explicit FileUnlinkWorker(const remmy::Cli& cli) noexcept : cli_(cli) {}
 
   /// @brief The total number of failures that this worker encountered.
@@ -176,16 +174,13 @@ class FileUnlinkWorker {
         // directory and retry it later.
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
-        // Like the inline openat failure in Scan: report the directory and
-        // leave it be (-f first tries rmdir, as rm does). It was never
-        // scanned, so nothing references it; only its parent's count of it
-        // is dropped.
         if (!cli_.Options().force ||
             (task->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT)) {
           failures_++;
-          ReportError(cli_.ExecutableName(), task->PathInto(path_buffer_),
-                      static_cast<int>(err.code));
+          WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                 static_cast<int>(err.code));
         }
+
         DirNode* parent = task->parent_;
         delete task;
         if (parent != nullptr) {
@@ -209,8 +204,8 @@ class FileUnlinkWorker {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
         failures_++;
-        ReportError(cli_.ExecutableName(), task->PathInto(path_buffer_),
-                    static_cast<int>(read.error()));
+        WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+               static_cast<int>(read.error()));
         break;
       }
 
@@ -227,8 +222,8 @@ class FileUnlinkWorker {
                                 AT_SYMLINK_NOFOLLOW) != 0) {
           if (errno != ENOENT) {
             failures_++;
-            ReportError(cli_.ExecutableName(), task->PathInto(path_buffer_),
-                        entry.name(), errno);
+            WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                   entry.name(), errno);
           }
           continue;
         }
@@ -239,8 +234,8 @@ class FileUnlinkWorker {
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
             errno != ENOENT) {
           failures_++;
-          ReportError(cli_.ExecutableName(), task->PathInto(path_buffer_),
-                      entry.name(), errno);
+          WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                 entry.name(), errno);
         }
         continue;
       }
@@ -259,8 +254,8 @@ class FileUnlinkWorker {
                    0 &&
                errno != ENOENT)) {
             failures_++;
-            ReportError(cli_.ExecutableName(), task->PathInto(path_buffer_),
-                        entry.name(), static_cast<int>(opened.error().code));
+            WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                   entry.name(), static_cast<int>(opened.error().code));
           }
           continue;
         }
@@ -302,7 +297,7 @@ class FileUnlinkWorker {
 
       if (current->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT) {
         failures_++;
-        ReportError(cli_.ExecutableName(), path_buffer_, errno);
+        WarnAt(cli_.ExecutableName(), path_buffer_, errno);
       }
 
       delete current;
@@ -408,22 +403,6 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   }
 }
 
-/// @brief Whether BSD rm's -i would ask before removing any of these operands.
-///
-/// An effective -i (so not one a later -f overrode) asks before every removal,
-/// but rm reports an operand that is missing (lstat(2)), "." or "..", or a
-/// directory without -r, -R or -d straight away, without asking.
-auto InteractiveWouldAsk(std::span<char* const> operands,
-                         const remmy::Options& options) noexcept -> bool {
-  const bool removes_dirs = options.recursive || options.dir;
-  return std::ranges::any_of(operands, [removes_dirs](const char* path) {
-    struct stat path_stat;
-    return !IsDotOrDotDotOperand(path) &&
-           cutils::os::lstat(path, &path_stat) == 0 &&
-           (removes_dirs || !S_ISDIR(path_stat.st_mode));
-  });
-}
-
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -438,14 +417,6 @@ auto main(int argc, char** argv) -> int {
   const auto cli = remmy::Argv{argc, argv}.TryParseOrAbort();
   if (!cli) {
     return cli.error();
-  }
-
-  if (cli->Options().interactive &&
-      InteractiveWouldAsk(cli->Operands(), cli->Options())) {
-    std::ignore = cutils::io::PrintLn(
-        cutils::io::stderr_writer,
-        "{}: -i: not supported yet; nothing was removed", cli->ProgramName());
-    return 1;
   }
 
   if (cli->Options().prompt_once &&
@@ -470,21 +441,20 @@ auto main(int argc, char** argv) -> int {
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      ReportError(prog, path, errno);
+      WarnAt(prog, path, errno);
       ++failures;
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        ReportError(prog, path, errno);
+        WarnAt(prog, path, errno);
         ++failures;
       }
       continue;
     }
 
     if (!cli->Options().recursive) {
-      // rm's own text, not strerror(EISDIR)'s "Is a directory".
       std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
                                         "{}: {}: is a directory", prog, path);
       ++failures;
@@ -494,10 +464,9 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      // As in the walk: under -f, rm removes an unreadable empty directory.
       if (!cli->Options().force ||
           (cutils::os::rmdir(path) != 0 && errno != ENOENT)) {
-        ReportError(prog, path, static_cast<int>(dirfd.error().code));
+        WarnAt(prog, path, static_cast<int>(dirfd.error().code));
         ++failures;
       }
       continue;
