@@ -10,7 +10,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -75,17 +74,7 @@ using RawDirent = ::dirent64;
 /// @return The text, valid until this thread next calls StrError.
 [[nodiscard]] auto StrError(int error) noexcept -> std::string_view;
 
-inline auto GetEUid() noexcept -> ::uid_t {
-  static constexpr auto kUnloaded = static_cast<::uid_t>(-1);
-  static std::atomic<::uid_t> cached{kUnloaded};
-
-  ::uid_t euid = cached.load(std::memory_order_relaxed);
-  if (euid == kUnloaded) {
-    euid = ::geteuid();
-    cached.store(euid, std::memory_order_relaxed);
-  }
-  return euid;
-}
+auto GetEUid() noexcept -> ::uid_t;
 
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {
   return ::lstat(path, out);
