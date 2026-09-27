@@ -48,8 +48,8 @@ source ~/.bashrc
 
 **Remmy is donationware.** That means that if you like `remmy`, if you like my
 work and if you want to support remmy or me, you *should* donate. I like money
-but I don't need it. **There are people who do**. Here are some institutions
-you can consider:
+as much as the next person, but I don't need it. **There are people who do**.
+Here are some institutions you can consider:
 
 - 🌍 [United World College](https://uwc.org/support-us/) transformed my life by
   taking me from a backwater swamp and opening my eyes to different cultures,
@@ -84,7 +84,7 @@ you can consider:
 in rural China experience development
 delay](https://www.sciencedirect.com/science/article/pii/S014759671930023X?via%3Dihub).
   During my high-school, I have met with some of the wonderful, bright and
-  curious kids in rural schools from Hebei. **Help rural Chinese kids avoid
+  curious kids in rural schools from Hubei. **Help rural Chinese kids avoid
   developmental delays and improve education** For any Chinese natives, please
   reach out to me if you know of a better charity that suits China's needs
   better.

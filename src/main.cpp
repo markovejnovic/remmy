@@ -58,6 +58,7 @@
 #include <cutils/io/print.hpp>
 #include <cutils/io/stderr_writer.hpp>
 #include <cutils/io/stdin_reader.hpp>
+#include <cutils/io/stdout_writer.hpp>
 #include <cutils/io/writer_ref.hpp>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
@@ -111,6 +112,17 @@ auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
                           name, cutils::os::StrError(error));
 }
 
+template <class... Args>
+auto LogIfRemoved(const remmy::Cli& cli, cutils::io::StdoutWriter& out,
+                  int status,
+                  cutils::io::FormatString<std::type_identity_t<Args>...> fmt,
+                  const Args&... args) noexcept -> int {
+  if (status == 0 && cli.Options().verbose) {
+    std::ignore = cutils::io::PrintLn(out, fmt, args...);
+  }
+  return status;
+}
+
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -125,7 +137,9 @@ class FileUnlinkWorker {
 
   /// @brief Create a worker.
   /// @note Cli must outlive the worker.
-  explicit FileUnlinkWorker(const remmy::Cli& cli) noexcept : cli_(cli) {}
+  explicit FileUnlinkWorker(const remmy::Cli& cli,
+                            cutils::io::StdoutWriter& removed) noexcept
+      : cli_(cli), stdout_(removed) {}
 
   /// @brief The total number of failures that this worker encountered.
   [[nodiscard]] auto Failures() const noexcept -> std::size_t {
@@ -146,7 +160,7 @@ class FileUnlinkWorker {
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
         if (!cli_.Options().force ||
-            (task->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT)) {
+            (RemoveEmptyLogged(task) != 0 && errno != ENOENT)) {
           failures_++;
           WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
                  static_cast<int>(err.code));
@@ -171,6 +185,9 @@ class FileUnlinkWorker {
  private:
   /// @brief Scan through the given directory.
   void Scan(DirNode* task, auto& ctx) noexcept {
+    // Entries are logged as "<dir>/<name>", fts's path for them.
+    const std::string_view dir_path =
+        cli_.Options().verbose ? task->PathInto(scan_path_) : "";
     for (const auto& read : dirs_.Read(task->fd_)) {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
@@ -202,7 +219,9 @@ class FileUnlinkWorker {
       }
 
       if (!is_dir) {
-        if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
+        if (LogIfRemoved(cli_, stdout_,
+                         cutils::os::unlinkat(task->fd_, entry.c_str(), 0),
+                         "{}/{}", dir_path, entry.name()) != 0 &&
             errno != ENOENT) {
           failures_++;
           WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), entry.name(),
@@ -221,8 +240,10 @@ class FileUnlinkWorker {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
           if (!cli_.Options().force ||
-              (cutils::os::unlinkat(task->fd_, entry.c_str(), AT_REMOVEDIR) !=
-                   0 &&
+              (LogIfRemoved(
+                   cli_, stdout_,
+                   cutils::os::unlinkat(task->fd_, entry.c_str(), AT_REMOVEDIR),
+                   "{}/{}", dir_path, entry.name()) != 0 &&
                errno != ENOENT)) {
             failures_++;
             WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
@@ -249,6 +270,11 @@ class FileUnlinkWorker {
     }
   }
 
+  auto RemoveEmptyLogged(const DirNode* node) noexcept -> int {
+    return LogIfRemoved(cli_, stdout_, node->RemoveEmpty(path_buffer_), "{}",
+                        path_buffer_);
+  }
+
   /// @brief Cleanup a DirNode if we need to.
   ///
   /// This tries to delete a DirNode if there are no more DirNode's referencing
@@ -266,7 +292,7 @@ class FileUnlinkWorker {
       }
       std::atomic_thread_fence(std::memory_order_acquire);
 
-      if (current->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT) {
+      if (RemoveEmptyLogged(current) != 0 && errno != ENOENT) {
         failures_++;
         WarnAt(cli_.CommandName(), path_buffer_, errno);
       }
@@ -287,6 +313,13 @@ class FileUnlinkWorker {
 
   /// @brief The total number of failures that this worker encountered.
   std::size_t failures_ = 0;
+
+  /// @brief -v: where removed paths go; null without -v.
+  cutils::io::StdoutWriter& stdout_;
+
+  /// @brief Thread-local buffer holding the path of the directory being
+  ///        scanned, for -v's lines about its entries.
+  std::string scan_path_;
 };
 
 using Scheduler =
@@ -405,9 +438,16 @@ auto RunRm(const remmy::Cli& cli) -> int {
   }
 
   const bool force = cli.Options().force;
+  cutils::io::StdoutWriter stdout(
+      {.shared = static_cast<std::size_t>(
+           cli.Options().verbose && ::isatty(STDOUT_FILENO) == 0 ? 64 * 1024
+                                                                 : 0),
+       .handle = 0},
+      STDOUT_FILENO);
+
   const std::uint16_t threads = ThreadCount();
   const std::string_view prog = cli.CommandName();
-  const FileUnlinkWorker prototype(cli);
+  const FileUnlinkWorker prototype(cli, stdout);
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
@@ -424,7 +464,8 @@ auto RunRm(const remmy::Cli& cli) -> int {
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
-      if (cutils::os::unlink(path) != 0) {
+      if (LogIfRemoved(cli, stdout, cutils::os::unlink(path), "{}", path) !=
+          0) {
         if (const int error = errno; !force || error != ENOENT) {
           WarnAt(prog, path, error);
           ++failures;
@@ -435,7 +476,9 @@ auto RunRm(const remmy::Cli& cli) -> int {
 
     if (!cli.Options().recursive) {
       if (cli.Options().dir) {
-        if (cutils::os::rmdir(path) != 0 && (!force || errno != ENOENT)) {
+        if (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}", path) !=
+                0 &&
+            (!force || errno != ENOENT)) {
           WarnAt(prog, path, errno);
           ++failures;
         }
@@ -452,7 +495,9 @@ auto RunRm(const remmy::Cli& cli) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      if (!force || (cutils::os::rmdir(path) != 0 && errno != ENOENT)) {
+      if (!force || (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}",
+                                  path) != 0 &&
+                     errno != ENOENT)) {
         WarnAt(prog, path, static_cast<int>(dirfd.error().code));
         ++failures;
       }

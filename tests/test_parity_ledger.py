@@ -42,3 +42,9 @@ def test_every_gap_has_cases_and_a_kebab_case_slug(slug: str) -> None:
     assert gap.cases
     assert gap.reason
     assert slug == slug.lower() and slug.replace("-", "").isalnum()
+
+
+@pytest.mark.parametrize("slug", [*parity_gaps.GAPS, *parity_gaps.DEFERRED])
+def test_timing_dependent_cases_belong_to_their_gap(slug: str) -> None:
+    gap = parity_gaps.GAPS.get(slug) or parity_gaps.DEFERRED[slug]
+    assert gap.timing_dependent <= gap.cases
