@@ -22,10 +22,14 @@
 
 ## Quickstart
 
-You can grab a `remmy` version from the [Releases](TODO) page:
+You can grab a `remmy` version from the
+[Releases](https://github.com/markovejnovic/remmy/releases) page. Builds are
+static and exist for Linux (x86_64, aarch64, armv7l, ppc64le, s390x) and
+Apple Silicon macOS 15+:
 
 ```bash
-curl TODO
+curl -fsSL "https://github.com/markovejnovic/remmy/releases/latest/download/remmy-$(uname -s)-$(uname -m).tar.gz" | tar -xz
+sudo install -m 0755 "remmy-$(uname -s)-$(uname -m)/remmy" /usr/local/bin/remmy
 ```
 
 `remmy` has the exact-same interface and semantics as your macOS `rm` and you

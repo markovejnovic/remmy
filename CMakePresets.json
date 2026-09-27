@@ -27,6 +27,17 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
     {
+      "name": "dist",
+      "inherits": "release",
+      "displayName": "GCC release for redistribution: generic CPU, static on Linux",
+      "binaryDir": "${sourceDir}/build/gcc-dist",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "REMMY_NATIVE": "OFF",
+        "REMMY_STATIC": "ON"
+      }
+    },
+    {
       "name": "lint",
       "inherits": "debug",
       "displayName": "Clang + clang-tidy over cutils and src (remmy ships from GCC)",
@@ -41,6 +52,7 @@
   "buildPresets": [
     { "name": "release", "configurePreset": "release" },
     { "name": "debug", "configurePreset": "debug" },
+    { "name": "dist", "configurePreset": "dist" },
     { "name": "lint", "configurePreset": "lint" }
   ],
   "testPresets": [
