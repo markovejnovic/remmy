@@ -94,7 +94,7 @@ auto Argv::IsUnlinkMode() const noexcept -> bool {
 /// unlink(1) parses no options: it takes exactly one operand, which a single
 /// leading "--" may precede. So "-f" alone is a file's name, "--" alone is one
 /// too, and "-f file" or "a b" are usage errors.
-auto Argv::UnlinkOperand() const noexcept
+auto Argv::ParseUnlinkOperand() const noexcept
     -> std::expected<const char*, UsageError> {
   const std::span<char* const> args = ArgsSpan();
   if (args.size() == 1) {
@@ -149,11 +149,12 @@ auto Argv::CommandName() const noexcept -> std::string_view {
 auto Argv::TryParseOrAbort() && noexcept
     -> std::expected<std::variant<Cli, UnlinkCli>, int> {
   if (IsUnlinkMode()) {
-    const auto operand = UnlinkOperand();
+    const auto operand = ParseUnlinkOperand();
     if (!operand) {
       ReportUsage(operand.error());
       return std::unexpected(kExitUsage);
     }
+
     return UnlinkCli(*operand, *this);
   }
 

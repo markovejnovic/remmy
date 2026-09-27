@@ -99,7 +99,9 @@ struct Argv {
   /// unlink is in that mode or not.
   auto IsUnlinkMode() const noexcept -> bool;
 
-  auto UnlinkOperand() const noexcept -> std::expected<const char*, UsageError>;
+  /// @brief Try to parse unlink's only operand.
+  auto ParseUnlinkOperand() const noexcept
+      -> std::expected<const char*, UsageError>;
 
   /// @brief Parse the arguments the same way that BSD rm does.
   auto Parse() const noexcept -> std::expected<Cli, UsageError>;
@@ -148,9 +150,9 @@ struct Cli {
   }
 
   /// @brief Check whether any arguments end with `.`, `..` or `/` and print an
-  ///        error if so.
+  ///        error if so and filter out said arguments.
   ///
-  /// @return A new Cli structure with old data filtered out.
+  /// @warn This modifies the process argv.
   auto DropUnremovableOperands() noexcept -> void;
 
  private:
@@ -162,6 +164,7 @@ struct Cli {
   bool exits_non_zero_ = false;
 };
 
+/// @brief The command line arguments when remmy is running as `unlink`.
 struct UnlinkCli {
   constexpr UnlinkCli(const char* operand, Argv argv) noexcept
       : operand_(operand), argv_(argv) {}
