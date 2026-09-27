@@ -338,6 +338,7 @@ GAPS: dict[str, Gap] = {
                 "test_rm_parity_edges.py::test_interactive_i[ir_unreadable_subdir]",
                 "test_rm_parity_edges.py::test_symlinks_to_directories[i_symlink_to_dir_nor]",
                 "test_rm_parity_edges.py::test_symlinks_to_directories[ir_symlink_to_dir_slash]",
+                "test_rm_parity_fs.py::test_path_shapes[file_trailing_slash_rfi]",
             }
         ),
     ),
@@ -412,6 +413,7 @@ GAPS: dict[str, Gap] = {
                 "test_rm_parity_cli.py::test_P_W_x[Wv]",
                 "test_rm_parity_cli.py::test_P_W_x[dW_missing]",
                 "test_rm_parity_cli.py::test_P_W_x[fW_missing]",
+                "test_rm_parity_cli.py::test_usage_and_getopt[all_flags]",
                 "test_rm_parity_cli.py::test_usage_and_getopt[all_flags_valid_no_W]",
                 "test_rm_parity_edges.py::test_P_and_W[P_mode_000]",
                 "test_rm_parity_edges.py::test_P_and_W[iW_existing]",

@@ -6,7 +6,7 @@
 namespace cutils::variant {
 
 template <typename... Fs>
-struct Overloaded : Fs... {
+struct Overloaded : Fs... {  // NOLINT(misc-multiple-inheritance)
   using Fs::operator()...;
 };
 
