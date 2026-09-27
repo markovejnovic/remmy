@@ -124,16 +124,22 @@ void Argv::ReportUsage(UsageError err) const noexcept {
 }
 
 auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
+  const auto refuse = [this](char option) -> std::expected<Cli, int> {
+    std::ignore =
+        cutils::io::PrintLn(cutils::io::stderr_writer,
+                            "{}: -{}: not supported yet; nothing was removed",
+                            ProgramName(), option);
+    return std::unexpected(kExitUnsupported);
+  };
+
   if (cli.options.interactive) {
-    return std::unexpected(kExitUnsupported);
+    return refuse('i');
   }
-
   if (cli.options.undelete && !cli.options.recursive) {
-    return std::unexpected(kExitUnsupported);
+    return refuse('W');
   }
-
   if (cli.options.one_file_system && cli.options.recursive) {
-    return std::unexpected(kExitUnsupported);
+    return refuse('x');
   }
 
   return cli;
