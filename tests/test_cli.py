@@ -170,7 +170,7 @@ def test_options_rm_would_not_act_on_are_ignored(
     res = run(*args)
 
     with check:
-        assert res.stderr == "" or "is a directory" in res.stderr or "Is a directory" in res.stderr, res
+        assert all(e.endswith((": is a directory", ": No such file or directory")) for e in res.errors), res
     with check:
         assert fstree.listing(workdir) == left
 

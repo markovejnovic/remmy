@@ -94,6 +94,21 @@ static auto ThreadCount() -> std::uint16_t {
   return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
 }
 
+/// @brief Report a failure the same way BSD rm's does.
+auto WarnAt(std::string_view prog, std::string_view path, int error) noexcept
+    -> void {
+  std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: {}",
+                                    prog, path, cutils::os::StrError(error));
+}
+
+/// @brief WarnAt for the entry `name` of the directory at `dir`.
+auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
+            int error) noexcept -> void {
+  std::ignore =
+      cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}/{}: {}", prog, dir,
+                          name, cutils::os::StrError(error));
+}
+
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -106,15 +121,14 @@ class FileUnlinkWorker {
   static constexpr std::size_t kAwaitingDescriptor = 1;
   static constexpr std::size_t kRanks = 2;
 
-  /// @brief Thread-local buffer used to compute the abspath of DirNode.
-  std::string path_buffer_;
-
-  /// @brief Thread-local iterator used to iterate over directories. Reset on
-  ///        each new task.
-  cutils::os::DirReader dirs_;
+  /// @brief Create a worker.
+  /// @note Cli must outlive the worker.
+  explicit FileUnlinkWorker(const remmy::Cli& cli) noexcept : cli_(cli) {}
 
   /// @brief The total number of failures that this worker encountered.
-  std::size_t failures_ = 0;
+  [[nodiscard]] auto Failures() const noexcept -> std::size_t {
+    return failures_;
+  }
 
   /// @brief The main entry-point the scheduler invokes for this task.
   ///
@@ -129,12 +143,18 @@ class FileUnlinkWorker {
         // directory and retry it later.
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
-        failures_++;
-        std::ignore = cutils::io::PrintLn(
-            cutils::io::stderr_writer, "cannot open '{}': {}",
-            task->PathInto(path_buffer_),
-            std::strerror(static_cast<int>(err.code)));
-        MaybeCleanupDirNode(task);
+        if (!cli_.Options().force ||
+            (task->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT)) {
+          failures_++;
+          WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                 static_cast<int>(err.code));
+        }
+
+        DirNode* parent = task->parent_;
+        delete task;
+        if (parent != nullptr) {
+          MaybeCleanupDirNode(parent);
+        }
       }
 
       return;
@@ -153,10 +173,8 @@ class FileUnlinkWorker {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
         failures_++;
-        std::ignore = cutils::io::PrintLn(
-            cutils::io::stderr_writer, "cannot read '{}': {}",
-            task->PathInto(path_buffer_),
-            std::strerror(static_cast<int>(read.error())));
+        WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+               static_cast<int>(read.error()));
         break;
       }
 
@@ -173,10 +191,8 @@ class FileUnlinkWorker {
                                 AT_SYMLINK_NOFOLLOW) != 0) {
           if (errno != ENOENT) {
             failures_++;
-            std::ignore = cutils::io::PrintLn(
-                cutils::io::stderr_writer, "cannot stat '{}/{}': {}",
-                task->PathInto(path_buffer_), entry.name(),
-                std::strerror(errno));
+            WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                   entry.name(), errno);
           }
           continue;
         }
@@ -187,9 +203,8 @@ class FileUnlinkWorker {
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
             errno != ENOENT) {
           failures_++;
-          std::ignore = cutils::io::PrintLn(
-              cutils::io::stderr_writer, "cannot remove '{}/{}': {}",
-              task->PathInto(path_buffer_), entry.name(), std::strerror(errno));
+          WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                 entry.name(), errno);
         }
         continue;
       }
@@ -203,11 +218,14 @@ class FileUnlinkWorker {
         if (opened) {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
-          failures_++;
-          std::ignore = cutils::io::PrintLn(
-              cutils::io::stderr_writer, "cannot open '{}/{}': {}",
-              task->PathInto(path_buffer_), entry.name(),
-              std::strerror(static_cast<int>(opened.error().code)));
+          if (!cli_.Options().force ||
+              (cutils::os::unlinkat(task->fd_, entry.c_str(), AT_REMOVEDIR) !=
+                   0 &&
+               errno != ENOENT)) {
+            failures_++;
+            WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+                   entry.name(), static_cast<int>(opened.error().code));
+          }
           continue;
         }
       }
@@ -248,14 +266,25 @@ class FileUnlinkWorker {
 
       if (current->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT) {
         failures_++;
-        std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                          "cannot remove '{}': {}",
-                                          path_buffer_, std::strerror(errno));
+        WarnAt(cli_.ExecutableName(), path_buffer_, errno);
       }
 
       delete current;
     }
   }
+
+  /// @brief The command line this run removes for.
+  const remmy::Cli& cli_;
+
+  /// @brief Thread-local buffer used to compute the abspath of DirNode.
+  std::string path_buffer_;
+
+  /// @brief Thread-local iterator used to iterate over directories. Reset on
+  ///        each new task.
+  cutils::os::DirReader dirs_;
+
+  /// @brief The total number of failures that this worker encountered.
+  std::size_t failures_ = 0;
 };
 
 using Scheduler =
@@ -354,22 +383,23 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
 }  // namespace
 
 auto main(int argc, char** argv) -> int {
-  const remmy::Argv args{argc, argv};
-  const auto cli = args.TryParseOrAbort();
+  const auto cli = remmy::Argv{argc, argv}.TryParseOrAbort();
   if (!cli) {
     return cli.error();
   }
 
-  if (cli->options.prompt_once &&
-      !ConfirmPromptOnce(cli->operands, cli->options.recursive)) {
+  if (cli->Options().prompt_once &&
+      !ConfirmPromptOnce(cli->Operands(), cli->Options().recursive)) {
     return 1;
   }
 
   const std::uint16_t threads = ThreadCount();
-  Scheduler scheduler(threads);
+  const std::string_view prog = cli->ExecutableName();
+  const FileUnlinkWorker prototype(*cli);
+  Scheduler scheduler(threads, prototype);
 
   std::size_t failures = 0;
-  for (const char* path : cli->operands) {
+  for (const char* path : cli->Operands()) {
     if (IsDotOrDotDotOperand(path)) {
       std::ignore = cutils::io::PrintLn(
           cutils::io::stderr_writer,
@@ -380,27 +410,22 @@ auto main(int argc, char** argv) -> int {
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                        "cannot remove '{}': {}", path,
-                                        std::strerror(errno));
+      WarnAt(prog, path, errno);
       ++failures;
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                          "cannot remove '{}': {}", path,
-                                          std::strerror(errno));
+        WarnAt(prog, path, errno);
         ++failures;
       }
       continue;
     }
 
-    if (!cli->options.recursive) {
+    if (!cli->Options().recursive) {
       std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                        "cannot remove '{}': {}", path,
-                                        std::strerror(EISDIR));
+                                        "{}: {}: is a directory", prog, path);
       ++failures;
       continue;
     }
@@ -408,10 +433,11 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      std::ignore = cutils::io::PrintLn(
-          cutils::io::stderr_writer, "cannot open '{}': {}", path,
-          std::strerror(static_cast<int>(dirfd.error().code)));
-      ++failures;
+      if (!cli->Options().force ||
+          (cutils::os::rmdir(path) != 0 && errno != ENOENT)) {
+        WarnAt(prog, path, static_cast<int>(dirfd.error().code));
+        ++failures;
+      }
       continue;
     }
 
@@ -422,7 +448,7 @@ auto main(int argc, char** argv) -> int {
   (void)scheduler.Wait();
 
   for (const auto& worker : scheduler.Workers()) {
-    failures += worker.failures_;
+    failures += worker.Failures();
   }
 
   return failures == 0 ? 0 : 1;

@@ -10,7 +10,9 @@ find_package(Threads REQUIRED)
 # Set here as well as in remmy's root so standalone builds get it too.
 add_compile_options(-fno-exceptions)
 
-add_library(cutils STATIC "${CMAKE_CURRENT_SOURCE_DIR}/src/os/limits/fd.cpp")
+add_library(cutils STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/os/limits/fd.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/os/os.cpp")
 add_library(cutils::cutils ALIAS cutils)
 target_compile_features(cutils PUBLIC cxx_std_26)
 target_link_libraries(cutils PUBLIC Threads::Threads)

@@ -13,30 +13,60 @@
 </div>
 
 <p align="center">
+  <!-- TODO(markovejnovic): Better benchmarks -->
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/res/time-dark.svg">
     <img src=".github/res/time.svg" alt="Median time to delete a 58,500-file tree: remmy with 4 threads 0.41 s, find | xargs rm with 4 jobs 0.73 s, bfs, GNU rm and find about 1.2 s, /bin/rm 1.27 s" width="720">
   </picture>
 </p>
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/res/scaling-dark.svg">
-    <img src=".github/res/scaling.svg" alt="Files deleted per second: remmy rises from 49k at 1 thread to 142k at 4 threads and falls to 106k at 8; xargs peaks at 80k at 4 jobs; rm is 46k" width="640">
-  </picture>
-</p>
+## Quickstart
 
-Deleting a 58,500-file tree takes `/bin/rm` **1.27 s**. remmy does it in
-**0.41 s**. It is a drop-in for `rm -r`.
+You can grab a `remmy` version from the [Releases](TODO) page:
 
-```sh
-remmy -r node_modules target build
+```bash
+curl TODO
 ```
 
-If you have an `rm` that beats it on macOS, please open an issue. I want to
-see it.
+`remmy` has the exact-same interface and semantics as your macOS `rm` and you
+can run:
 
-## Results
+```bash
+remmy -r node_modules/
+```
+
+If you trust `remmy` enough, you can add an alias in your `.bashrc` to use
+`remmy` instead of `rm`:
+
+```bash
+echo "alias rm='/usr/local/bin/remmy'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+## Donationware
+
+TODO
+
+## Compatibility
+
+My goal is to ensure that `remmy` is one-for-one compatible with `rm`. I've
+worked at Bun for a brief period and I really know how annoying it is if tools
+aren't compatible with the standard. `remmy` prioritizes compatibility over
+performance.
+
+**If your `rm` and `remmy` output are not the same, yell at me.**
+
+## Performance
+
+I've spent a lot of time optimizing `remmy`. Here's how it compares to other
+options for removing directories:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/res/speedup-by-tree-dark.svg">
+    <img src=".github/res/speedup-by-tree.svg" alt="Speedup over /bin/rm by tree shape at 4 threads: remmy 2.5 to 3.1 times on trees of 51k to 333k files, 1.5 times on 1 MiB files, and 0.48 times on a 125-file tree" width="720">
+  </picture>
+</p>
 
 | Tool                          | Time    | Files/s | vs. `rm` |
 | ----------------------------- | ------: | ------: | -------: |
@@ -49,79 +79,53 @@ see it.
 | `/bin/rm -rf`                 | 1.27 s  |    46k  |    1.0×  |
 | `find \| xargs rm`            | 1.68 s  |    35k  |    0.76× |
 
-The tree is 585 directories of 100 empty files each, with a warm cache. On one
-thread remmy is level with the fastest single-threaded tools. With four it is
-three times faster than `rm`, and 1.8× faster than the best shell pipeline.
+Here's what remmy does (or doesn't do) to speed stuff up.
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/res/speedup-by-tree-dark.svg">
-    <img src=".github/res/speedup-by-tree.svg" alt="Speedup over /bin/rm by tree shape at 4 threads: remmy 2.5 to 3.1 times on trees of 51k to 333k files, 1.5 times on 1 MiB files, and 0.48 times on a 125-file tree" width="720">
-  </picture>
-</p>
-
-Other trees tell the same story, with two exceptions:
-
-- **Large files.** On 1,935 files of 1 MiB each, remmy is 1.5× faster than
-  `rm`, about level with `xargs -P4`.
-- **Tiny trees.** On 125 files remmy takes 8.5 ms to `rm`'s 4.1 ms. The
-  thread count does not change it, so it is a fixed startup cost.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/res/time-cold-dark.svg">
-    <img src=".github/res/time-cold.svg" alt="Median time to delete the 58,500-file tree after purging the cache: remmy with 4 threads 0.77 s, xargs with 4 jobs 0.82 s, /bin/rm 1.32 s, remmy with 1 thread 1.56 s" width="640">
-  </picture>
-</p>
-
-With a cold cache (`purge` before every run), remmy at 4 threads is 1.7× faster
-than `rm` and only just ahead of `xargs -P4`. On one thread it is 18% slower
-than `rm`.
-
-All numbers are medians of 20 runs (16 cold), each on a freshly built tree,
-timed with [hyperfine](https://github.com/sharkdp/hyperfine) on an M4
-MacBook Pro (16 GB, macOS 27). To reproduce them, run
-`uv run pytest tests/bench --bench=full -p no:xdist`.
-
-Remmy gets its speed by:
-
-1. **Never stats.** It reads raw directory entries with
+1. **Avoids calling `stat`** It reads raw directory entries with
    [`getdirentries64`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/getdirentries.2.html).
-2. **Deletes relative to open directories.** Every unlink is an `unlinkat`
+2. **Walks in parallel.** Each directory is a task on a [Chase–Lev
+   work-stealing scheduler](https://inria.hal.science/hal-00802885/document).
+3. **Deletes relative to open directories.** Every unlink is an `unlinkat`
    against a descriptor it already holds, so the kernel never looks up a
    full path.
-3. **Walks in parallel.** Each directory is a task on a [Chase–Lev
-   work-stealing scheduler](https://inria.hal.science/hal-00802885/document).
 4. **Avoids allocations**. Almost every spot where a naive application would
    allocate, remmy tries really hard not to. Even CLI parsing skips
    allocations.
 
-Remmy is aggresively tested to ensure compatibility with `rm`. **Note that
-remmy is currently not completely compatible with `rm` and is not considered
-production-ready.**
+### Detailed Benchmarks
 
-## Install
+TODO
 
-remmy is written in C++26 and needs GCC 16. It runs on macOS and Linux; the
-numbers above are macOS-only.
+## Contributing
 
-```sh
-brew install gcc ninja cmake
-cmake --preset release
-cmake --build --preset release
-cp build/gcc-release/remmy /usr/local/bin/
-```
+Thank you for wanting to contribute! Here are some quick notes:
 
-## Usage
+### AI Disclosure
 
-```sh
-remmy file1 file2           # remove files
-remmy -r dir1 dir2          # remove directories recursively
-REMMY_THREADS=8 remmy -r d  # override the worker count (default: 4)
-```
+**I have used AI in this project.** `remmy`, for the most-part, is
+hand-written. Areas where code has not been hand-written and/or have had a
+cursory, rudimentary review, are marked as such. These are generally low-risk
+areas. **None of the tests are hand-written**.
 
-**Note that overriding the thread-count is likely to give you worse results
-than the default.**
+**Note that I expect all PRs to use no more AI than I have.**
+
+### Some Contributing Rules
+
+- Be nice and respectful in the issues/PRs. If you are mean to people, I will
+  immediately ban you from the project.
+- **Note the license is not open-source. It is very close to GPLv3, but it is
+  not GPLv3.** For the most part, this is due to an exclusion for the Omarchy
+  project to use `remmy`.
+- You are very welcome to open issues and/or PRs. I will do my **absolute
+  best** to help you push your PRs across the finish line.
+- I will not accept AI PRs. _I get to use AI because I maintain the project and
+  I understand what my agents are doing. I do not understand what your agents
+  are doing._ You are welcome to use AI as much as you want, but AI-generated
+  PRs, overly-documented slop PRs will be immediately closed. I expect you to
+  understand your code as if you wrote it by hand. I will label delinquent PRs
+  as such and you are **more than welcome to ping me if you think I
+  misclassified your PR**. You are welcome to use aggressive AI for tests, and
+  I will perform only a cursory review on those as the risk is minor.
 
 ## License
 

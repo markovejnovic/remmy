@@ -94,7 +94,7 @@ jobs:
 
   remmy:
     name: remmy (${{ matrix.preset }})
-    runs-on: macos-latest
+    runs-on: xcode-27
     strategy:
       fail-fast: false
       matrix:

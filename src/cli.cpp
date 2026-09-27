@@ -3,11 +3,14 @@
 #include <cstddef>
 #include <expected>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
 #include "cutils/io/print.hpp"
 #include "cutils/io/stderr_writer.hpp"
+#include "cutils/os/os.hpp"
 
 namespace remmy {
 
@@ -65,7 +68,7 @@ constexpr std::string_view kUsageMsg =
 }  // namespace
 
 auto Argv::Parse() const noexcept -> std::expected<Cli, UsageError> {
-  Cli cli;
+  Options options;
   std::size_t index;
 
   for (index = 0; index < ArgsSpan().size(); ++index) {
@@ -80,21 +83,32 @@ auto Argv::Parse() const noexcept -> std::expected<Cli, UsageError> {
     }
 
     for (const char letter : arg.substr(1)) {
-      if (!ApplyOption(cli.options, letter)) {
+      if (!ApplyOption(options, letter)) {
         return std::unexpected(UsageError(letter));
       }
     }
   }
 
-  cli.operands = ArgsSpan().subspan(index);
-  if (cli.operands.empty() && !cli.options.force) {
+  const std::span<char* const> operands = ArgsSpan().subspan(index);
+  if (operands.empty() && !options.force) {
     return std::unexpected(UsageError::Unknown());
   }
-  return cli;
+  return Cli(options, operands, *this);
 }
 
-auto Argv::TryParseOrAbort() const noexcept -> std::expected<Cli, int> {
-  const auto parsed = Parse();
+auto Argv::ExecutableName() const noexcept -> std::string_view {
+  if (const std::string_view name = cutils::os::GetProgName(); !name.empty()) {
+    return name;
+  }
+
+  const std::string_view argv0 = ProgramName();
+  const std::string_view base = argv0.substr(argv0.rfind('/') + 1);
+
+  return base.empty() ? detail::kDefaultProgramName : base;
+}
+
+auto Argv::TryParseOrAbort() && noexcept -> std::expected<Cli, int> {
+  auto parsed = Parse();
 
   if (!parsed) {
     ReportUsage(parsed.error());
@@ -103,13 +117,13 @@ auto Argv::TryParseOrAbort() const noexcept -> std::expected<Cli, int> {
 
   // Okay, well we parsed something. Let's abort on flags we don't actually
   // support.
-  if (parsed->operands.empty()) {
-    return *parsed;
+  if (parsed->Operands().empty()) {
+    return *std::move(parsed);
   }
 
   // TODO(markovejnovic): This is a temporary hack since remmy doesn't support
   //                      all of rm's flags yet.
-  return CheckUnsupported(*parsed);
+  return CheckUnsupported(*std::move(parsed));
 }
 
 void Argv::ReportUsage(UsageError err) const noexcept {
@@ -132,13 +146,13 @@ auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
     return std::unexpected(kExitUnsupported);
   };
 
-  if (cli.options.interactive) {
+  if (cli.Options().interactive) {
     return refuse('i');
   }
-  if (cli.options.undelete && !cli.options.recursive) {
+  if (cli.Options().undelete && !cli.Options().recursive) {
     return refuse('W');
   }
-  if (cli.options.one_file_system && cli.options.recursive) {
+  if (cli.Options().one_file_system && cli.Options().recursive) {
     return refuse('x');
   }
 

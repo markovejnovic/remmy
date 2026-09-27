@@ -24,7 +24,8 @@ def test_directory_without_recursive_is_refused_and_untouched(run: Runner, workd
     with check:
         assert len(res.errors) == 2, res
     with check:
-        assert os.strerror(errno.EISDIR) in res.stderr
+        # BSD rm's own text, not strerror(EISDIR)'s "Is a directory".
+        assert ": d: is a directory\n" in res.stderr and ": empty: is a directory\n" in res.stderr, res
     with check:
         assert fstree.snapshot_dir(workdir) == before
 

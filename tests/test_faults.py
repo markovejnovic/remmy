@@ -127,7 +127,7 @@ def test_failed_operand_open(remmy_bin: Path, faultlib: Path, workdir: Path) -> 
     with check:
         assert res.returncode == 1, res
     with check:
-        assert "'t'" in res.stderr and os.strerror(errno.EIO) in res.stderr, res
+        assert f": t: {os.strerror(errno.EIO)}\n" in res.stderr, res
     with check:
         assert not fstree.exists(workdir / "other")
     with check:
@@ -149,7 +149,7 @@ def test_failed_operand_lstat(remmy_bin: Path, faultlib: Path, workdir: Path) ->
     with check:
         assert res.returncode == 1, res
     with check:
-        assert "'f'" in res.stderr, res
+        assert ": f: " in res.stderr, res
     with check:
         assert fstree.listing(workdir) == {"f"}
 
@@ -169,7 +169,7 @@ def test_failed_top_level_unlink(remmy_bin: Path, faultlib: Path, workdir: Path)
     with check:
         assert res.returncode == 1, res
     with check:
-        assert "'f'" in res.stderr and os.strerror(errno.EPERM) in res.stderr, res
+        assert f": f: {os.strerror(errno.EPERM)}\n" in res.stderr, res
     with check:
         assert fstree.listing(workdir) == {"f"}
 

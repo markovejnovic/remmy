@@ -13,6 +13,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cutils/os/fd.hpp>
 #include <expected>
@@ -58,6 +59,20 @@ using RawDirent = ::dirent64;
     -> std::expected<Fd, OpenError> {
   return Fd::Open([&] { return ::openat(dir.get(), name, flags); });
 }
+
+/// @brief The program's basename.
+[[nodiscard]] inline auto GetProgName() noexcept -> std::string_view {
+#if defined(__GLIBC__)
+  const char* name = ::program_invocation_short_name;
+#else
+  const char* name = ::getprogname();
+#endif
+  return name != nullptr ? name : "";
+}
+
+/// @brief A thread-safe strerror(3).
+/// @return The text, valid until this thread next calls StrError.
+[[nodiscard]] auto StrError(int error) noexcept -> std::string_view;
 
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {
   return ::lstat(path, out);
