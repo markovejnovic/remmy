@@ -1,14 +1,8 @@
-"""Property-based tests: generated names, trees, permissions, and operands.
-
-Hypothesis shrinks any failure to a minimal tree and replays it from its
-example database on the next run. ``HYPOTHESIS_PROFILE=thorough`` searches
-harder.
-"""
-
-from __future__ import annotations
+"""Property-based tests; ``HYPOTHESIS_PROFILE=thorough`` searches harder."""
 
 import os
 from pathlib import Path
+from typing import Any
 
 import fstree
 import pytest
@@ -19,18 +13,16 @@ from hypothesis import assume, event, example, given, target
 from hypothesis import strategies as st
 from oracle import RM, RM_REMOVES_UNREADABLE_EMPTY_DIRS, compare_with_rm
 
+needs_rm = pytest.mark.skipif(not os.access(RM, os.X_OK), reason=f"{RM} not available")
+
 
 @pytest.fixture(scope="module")
 def base(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("prop")
 
 
-@given(
-    name=strategies.names,
-    is_dir=st.booleans(),
-    separator=st.sampled_from(["./", "--"]),
-)
-@example(name="é", is_dir=False, separator="./")
+@given(name=strategies.names, is_dir=st.booleans(), separator=st.sampled_from(["./", "--"]))
+@example(name="é", is_dir=False, separator="./")
 @example(name="x" * 255, is_dir=True, separator="./")
 @example(name="-r", is_dir=True, separator="--")
 @example(name="--help", is_dir=False, separator="--")
@@ -40,11 +32,8 @@ def test_any_name_is_removable(remmy_bin: Path, base: Path, name: str, is_dir: b
         work = fstree.build(d / "work", {name: {name: "x"} if is_dir else "x"})
         fstree.build(d, {"keep": ""})
         operand = ["./" + name] if separator == "./" else ["--", name]
-
         res = run_remmy(remmy_bin, ["-r", *operand], cwd=work)
-
-        assert (res.returncode, res.stdout, res.stderr) == (0, "", ""), res
-        assert fstree.listing(d) == {"work", "keep"}
+        assert (res.returncode, res.stdout, res.stderr, fstree.listing(d)) == (0, "", "", {"work", "keep"}), res
 
 
 @given(tree=strategies.trees, threads=st.integers(1, 16))
@@ -53,67 +42,50 @@ def test_any_tree_is_removed_without_escaping(remmy_bin: Path, base: Path, tree:
     event(f"threads: {strategies.bucket(threads)}")
     with fstree.scratch(base) as d:
         outside = fstree.build(d / "outside", {"file": "keep", "dir": {"x": "keep"}})
-        fstree.build(d / "t", {"tree": tree, "escape": Symlink(str(outside))})
-        fstree.build(d, {"keep": {"x": "k"}})
+        fstree.build(d, {"t": {"tree": tree, "escape": Symlink(str(outside))}, "keep": {"x": "k"}})
         before = {p: fstree.snapshot_dir(d / p) for p in ("outside", "keep")}
-
         res = run_remmy(remmy_bin, ["-r", "t"], cwd=d, threads=threads)
-
-        assert (res.returncode, res.stdout, res.stderr) == (0, "", ""), res
-        assert not fstree.exists(d / "t")
+        assert (res.returncode, res.stdout, res.stderr, fstree.exists(d / "t")) == (0, "", "", False), res
         assert {p: fstree.snapshot_dir(d / p) for p in before} == before
 
 
 @given(tree=strategies.trees, threads=st.integers(1, 4), fd_limit=st.integers(12, 64))
-def test_any_tree_is_removed_under_fd_limit(
-    remmy_bin: Path, base: Path, tree: fstree.Spec, threads: int, fd_limit: int
-) -> None:
+def test_any_tree_is_removed_under_fd_limit(remmy_bin: Path, base: Path, tree, threads: int, fd_limit: int) -> None:
     strategies.describe_tree(tree)
-    depth, dirs, _ = strategies.tree_stats(tree)
+    depth, dirs = strategies.tree_stats(tree)
     # Descriptor pressure: nesting and fan-out relative to what remmy may open.
     target(depth / fd_limit, label="depth per descriptor")
     target(dirs / fd_limit, label="directories per descriptor")
     event(f"deeper than fd limit: {depth >= fd_limit}")
     with fstree.scratch(base) as d:
         fstree.build(d / "t", tree)
-
         res = run_remmy(remmy_bin, ["-r", "t"], cwd=d, threads=threads, fd_limit=fd_limit)
-
-        assert res.returncode == 0, res
-        assert not fstree.exists(d / "t")
-
-
-# --- Against /bin/rm ---------------------------------------------------------
-
-MODES = st.sampled_from([0o000, 0o111, 0o333, 0o444, 0o555])
-
-needs_rm = pytest.mark.skipif(not os.access(RM, os.X_OK), reason=f"{RM} not available")
-
-
-def _subtree(tree: fstree.Spec, path: str) -> fstree.Spec:
-    """The spec of directory ``path`` ("t" or "t/..."), with ``tree`` as "t"."""
-    for part in path.split("/")[1:]:
-        tree = tree[part]
-    return tree
+        assert (res.returncode, fstree.exists(d / "t")) == (0, False), res
 
 
 @pytest.mark.differential
 @needs_rm
 @given(tree=strategies.trees, data=st.data())
-def test_partial_failures_match_rm(
-    remmy_bin: Path, base: Path, is_root: bool, tree: fstree.Spec, data: st.DataObject
-) -> None:
+def test_partial_failures_match_rm(remmy_bin: Path, base: Path, is_root: bool, tree: fstree.Spec, data) -> None:
     if is_root:
         pytest.skip("root bypasses permissions")
     dirs = ["t", *(f"t/{p}" for p in strategies.dir_paths(tree))]
-    locks = data.draw(st.dictionaries(st.sampled_from(dirs), MODES, max_size=4), label="locks")
+    modes = st.sampled_from([0o000, 0o111, 0o333, 0o444, 0o555])
+    locks = data.draw(st.dictionaries(st.sampled_from(dirs), modes, max_size=4), label="locks")
     strategies.describe_tree(tree)
     event(f"locked directories: {strategies.bucket(len(locks))}")
     for mode in set(locks.values()):
         event(f"lock mode used: {mode:03o}")
     target(float(len(locks)), label="locked directories")
     if RM_REMOVES_UNREADABLE_EMPTY_DIRS:
-        assume(not any(mode & 0o400 == 0 and not _subtree(tree, path) for path, mode in locks.items()))
+
+        def subtree(path: str) -> fstree.Spec:
+            node: Any = tree
+            for part in path.split("/")[1:]:
+                node = node[part]
+            return node
+
+        assume(not any(mode & 0o400 == 0 and not subtree(path) for path, mode in locks.items()))
 
     def recipe(root: Path) -> None:
         fstree.build(root / "t", tree)
@@ -127,36 +99,14 @@ def test_partial_failures_match_rm(
 
 @pytest.mark.differential
 @needs_rm
-@given(
-    top=strategies.trees.filter(bool),
-    data=st.data(),
-    recursive=st.booleans(),
-)
-def test_operand_lists_match_rm(
-    remmy_bin: Path, base: Path, top: fstree.Spec, data: st.DataObject, recursive: bool
-) -> None:
-    """Existing and missing top-level operands, in any order, with and without -r.
-
-    Each name appears at most once: naming a directory twice races in remmy,
-    which is covered separately in test_recursive.
-    """
-    operands = data.draw(
-        st.lists(
-            st.one_of(st.sampled_from(sorted(top)), strategies.names),
-            min_size=1,
-            max_size=8,
-            unique_by=strategies.fs_key,
-        ),
-        label="operands",
-    )
-
+@given(top=strategies.trees.filter(bool), data=st.data(), recursive=st.booleans())
+def test_operand_lists_match_rm(remmy_bin: Path, base: Path, top: fstree.Spec, data, recursive: bool) -> None:
+    # Each name at most once: naming a directory twice races in remmy (covered in test_recursive).
+    ops = st.one_of(st.sampled_from(sorted(top)), strategies.names)
+    operands = data.draw(st.lists(ops, min_size=1, max_size=8, unique_by=strategies.fs_key), label="operands")
     existing = {strategies.fs_key(n) for n in top}
     missing = sum(strategies.fs_key(o) not in existing for o in operands)
     event(f"operands: {strategies.bucket(len(operands))}, missing: {strategies.bucket(missing)}")
     event(f"recursive: {recursive}")
-
-    def recipe(root: Path) -> None:
-        fstree.build(root, top)
-
     with fstree.scratch(base) as d:
-        compare_with_rm(remmy_bin, d, recipe, [*(["-r"] if recursive else []), "--", *operands])
+        compare_with_rm(remmy_bin, d, lambda r: fstree.build(r, top), [*(["-r"] if recursive else []), "--", *operands])
