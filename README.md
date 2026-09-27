@@ -84,7 +84,7 @@ Here are some institutions you can consider:
 in rural China experience development
 delay](https://www.sciencedirect.com/science/article/pii/S014759671930023X?via%3Dihub).
   During my high-school, I have met with some of the wonderful, bright and
-  curious kids in rural schools from Hebei. **Help rural Chinese kids avoid
+  curious kids in rural schools from Hubei. **Help rural Chinese kids avoid
   developmental delays and improve education** For any Chinese natives, please
   reach out to me if you know of a better charity that suits China's needs
   better.
