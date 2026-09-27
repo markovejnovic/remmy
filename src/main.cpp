@@ -109,17 +109,9 @@ auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
                           name, cutils::os::StrError(error));
 }
 
-/// @brief Whether an operand's failure is one to report: -f silences a missing
-///        operand (ENOENT, which also covers "" and paths through missing
-///        directories) and nothing else, as BSD rm does, except that with -r
-///        or -R it also hides failures to stat (see StatFailureReportable).
-auto Reportable(bool force, int error) noexcept -> bool {
-  return !force || error != ENOENT;
-}
-
 /// @brief Whether an operand lstat(2) failed on with `error` is one to report.
 ///
-/// Without -r or -R, -f silences only ENOENT (see Reportable). With either,
+/// Without -r or -R, -f silences only ENOENT. With either,
 /// BSD rm hands its operands to fts(3) and, under -f and for anyone but root
 /// (rm's `needstat`), passes over every operand fts could not stat without a
 /// word, whatever the error: a trailing slash on a file, a path through a file
@@ -130,7 +122,7 @@ auto StatFailureReportable(const remmy::Options& options, int error) noexcept
   if (options.force && options.recursive && geteuid() != 0) {
     return false;
   }
-  return Reportable(options.force, error);
+  return !options.force || error != ENOENT;
 }
 
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
@@ -466,7 +458,7 @@ auto main(int argc, char** argv) -> int {
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        if (const int error = errno; Reportable(force, error)) {
+        if (const int error = errno; !force || error != ENOENT) {
           WarnAt(prog, path, error);
           ++failures;
         }
