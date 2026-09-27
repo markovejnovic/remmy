@@ -94,16 +94,14 @@ static auto ThreadCount() -> std::uint16_t {
   return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
 }
 
-/// @brief Reports a failure the way BSD rm's warn(3) does:
-///        "<prog>: <path>: <strerror>", with `path` printed as given.
+/// @brief Report a failure the same way BSD rm's does.
 auto WarnAt(std::string_view prog, std::string_view path, int error) noexcept
     -> void {
   std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: {}",
                                     prog, path, cutils::os::StrError(error));
 }
 
-/// @brief WarnAt for the entry `name` of the directory at `dir`, which is
-///        the path fts(3) gives rm for it.
+/// @brief WarnAt for the entry `name` of the directory at `dir`.
 auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
             int error) noexcept -> void {
   std::ignore =
