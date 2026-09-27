@@ -17,6 +17,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <new>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -77,7 +78,7 @@ class HeapArrayIterator {
 
   template <typename U>
     requires std::same_as<U, value_type> && std::is_const_v<T>
-  constexpr HeapArrayIterator(  // NOLINT(google-explicit-constructor)
+  constexpr HeapArrayIterator(  // NOLINT(google-explicit-constructor,misc-explicit-constructor)
       const HeapArrayIterator<U>& o) noexcept
       : ptr_(o.ptr_) {}
 
@@ -192,6 +193,12 @@ class HeapArrayIterator {
   T* ptr_{nullptr};
 };
 
+struct for_overwrite_t {
+  explicit for_overwrite_t() = default;
+};
+
+inline constexpr for_overwrite_t for_overwrite{};
+
 /// @brief A fixed-size, heap-allocated, allocator-aware dynamic array.
 ///
 /// @tparam T Element type (a non-`const` object type).
@@ -235,6 +242,20 @@ class HeapArray {
       : alloc_(alloc) {
     data_ = BuildBlock(alloc_, count, [](Allocator& a, T* loc, size_type) {
       alloc_traits::construct(a, loc);
+    });
+    size_ = count;
+  }
+
+  constexpr HeapArray(for_overwrite_t tag, size_type count)
+    requires std::default_initializable<T> &&
+             std::default_initializable<Allocator>
+      : HeapArray(tag, count, Allocator()) {}
+
+  constexpr HeapArray(for_overwrite_t, size_type count, const Allocator& alloc)
+    requires std::default_initializable<T>
+      : alloc_(alloc) {
+    data_ = BuildBlock(alloc_, count, [](Allocator&, T* loc, size_type) {
+      ::new (static_cast<void*>(loc)) T;
     });
     size_ = count;
   }
@@ -751,6 +772,9 @@ struct NoDefault {
 };
 static_assert(
     !std::constructible_from<cutils::HeapArray<NoDefault>, std::size_t>);
+static_assert(std::constructible_from<HAi, for_overwrite_t, std::size_t>);
+static_assert(!std::constructible_from<cutils::HeapArray<NoDefault>,
+                                       for_overwrite_t, std::size_t>);
 
 static_assert(
     std::same_as<decltype(cutils::HeapArray{

@@ -341,6 +341,18 @@ SCENARIO("HeapArray constructors fill the array from their arguments",
       }
     }
   }
+  GIVEN("an element count and the for_overwrite tag") {
+    struct Marked {
+      int value = 5;
+    };
+    WHEN("an array is constructed from them") {
+      const HeapArray<Marked> a(cutils::for_overwrite, 3);
+      THEN("every element is default-initialised") {
+        REQUIRE(a.size() == 3);
+        REQUIRE(std::ranges::all_of(a, [](Marked m) { return m.value == 5; }));
+      }
+    }
+  }
   GIVEN("an element count and a value") {
     WHEN("an array is constructed from them") {
       const HeapArray<int> a(3, 9);
