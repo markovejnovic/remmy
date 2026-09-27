@@ -74,16 +74,13 @@ struct Argv {
     return Span().empty() ? detail::kDefaultProgramName : Span()[0];
   }
 
-  /// @brief The name rm's diagnostics start with: getprogname(3), the basename
-  ///        of the executed file, not argv[0] as ProgramName is. Falls back to
-  ///        argv[0]'s basename when the platform does not know it.
+  /// @brief The name of the program.
   [[nodiscard]] auto ExecutableName() const noexcept -> std::string_view;
 
   /// @brief Try to parse the arguments, returning an error code if parsing
   ///        fails.
   ///
-  /// Consumes the Argv: the Cli it returns owns it from then on, so a caller
-  /// has one command line to ask for names rather than two.
+  /// @warn Consumes Argv. Do not re-use it.
   auto TryParseOrAbort() && noexcept -> std::expected<Cli, int>;
 
  private:
