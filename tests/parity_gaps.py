@@ -74,35 +74,6 @@ def mark_known_gaps(items: list[pytest.Item]) -> None:
 
 
 GAPS: dict[str, Gap] = {
-    "force": Gap(
-        reason=(
-            "-f silences ENOENT only: missing operands (also '' and paths through missing directories) print "
-            "nothing and leave the exit status alone; every other error still prints and exits 1."
-        ),
-        cases=frozenset(
-            {
-                "test_rm_parity_cli.py::test_P_W_x[rWf_missing]",
-                "test_rm_parity_cli.py::test_interactive_i[if_missing]",
-                "test_rm_parity_cli.py::test_legacy_command_mode[legacy_empty_string_f]",
-                "test_rm_parity_cli.py::test_legacy_command_mode[legacy_missing_f]",
-                "test_rm_parity_cli.py::test_operands[empty_string_f]",
-                "test_rm_parity_cli.py::test_operands[empty_string_rf]",
-                "test_rm_parity_cli.py::test_operands[missing_and_present_f]",
-                "test_rm_parity_cli.py::test_operands[missing_file_f]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[all_flags]",
-                "test_rm_parity_cli.py::test_usage_and_getopt[ff]",
-                "test_rm_parity_edges.py::test_length_boundaries[path_1023_missing_f]",
-                "test_rm_parity_edges.py::test_symlinks_to_directories[rf_dangling_symlink_slash]",
-                "test_rm_parity_fs.py::test_missing_and_directories[empty_string_operand_f]",
-                "test_rm_parity_fs.py::test_missing_and_directories[fs_missing_and_present_f]",
-                "test_rm_parity_fs.py::test_missing_and_directories[fs_missing_file_f]",
-                "test_rm_parity_fs.py::test_missing_and_directories[missing_file_rf]",
-                "test_rm_parity_fs.py::test_missing_and_directories[missing_in_missing_dir_f]",
-                "test_rm_parity_fs.py::test_missing_and_directories[only_errors_f_exit]",
-                "test_rm_parity_fs.py::test_names[name_non_utf8_missing_f]",
-            }
-        ),
-    ),
     "dot-slash-guards": Gap(
         reason=(
             "Before anything is removed, every operand whose last component is '.' or '..' is dropped and a "

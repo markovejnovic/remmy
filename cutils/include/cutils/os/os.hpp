@@ -74,6 +74,8 @@ using RawDirent = ::dirent64;
 /// @return The text, valid until this thread next calls StrError.
 [[nodiscard]] auto StrError(int error) noexcept -> std::string_view;
 
+auto GetEUid() noexcept -> ::uid_t;
+
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {
   return ::lstat(path, out);
 }

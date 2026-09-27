@@ -393,6 +393,7 @@ auto main(int argc, char** argv) -> int {
     return 1;
   }
 
+  const bool force = cli->Options().force;
   const std::uint16_t threads = ThreadCount();
   const std::string_view prog = cli->ExecutableName();
   const FileUnlinkWorker prototype(*cli);
@@ -410,15 +411,21 @@ auto main(int argc, char** argv) -> int {
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      WarnAt(prog, path, errno);
-      ++failures;
+      if (const int error = errno;
+          !(force && cli->Options().recursive && cutils::os::GetEUid() != 0) &&
+          (!force || error != ENOENT)) {
+        WarnAt(prog, path, error);
+        ++failures;
+      }
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        WarnAt(prog, path, errno);
-        ++failures;
+        if (const int error = errno; !force || error != ENOENT) {
+          WarnAt(prog, path, error);
+          ++failures;
+        }
       }
       continue;
     }
@@ -433,8 +440,7 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      if (!cli->Options().force ||
-          (cutils::os::rmdir(path) != 0 && errno != ENOENT)) {
+      if (!force || (cutils::os::rmdir(path) != 0 && errno != ENOENT)) {
         WarnAt(prog, path, static_cast<int>(dirfd.error().code));
         ++failures;
       }
