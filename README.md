@@ -20,13 +20,6 @@
   </picture>
 </p>
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/res/scaling-dark.svg">
-    <img src=".github/res/scaling.svg" alt="Files deleted per second: remmy rises from 49k at 1 thread to 142k at 4 threads and falls to 106k at 8; xargs peaks at 80k at 4 jobs; rm is 46k" width="640">
-  </picture>
-</p>
-
 ## Quickstart
 
 You can grab a `remmy` version from the [Releases](TODO) page:
@@ -49,6 +42,10 @@ If you trust `remmy` enough, you can add an alias in your `.bashrc` to use
 echo "alias rm='/usr/local/bin/remmy'" >> ~/.bashrc
 source ~/.bashrc
 ```
+
+## Donationware
+
+TODO
 
 ## Compatibility
 
