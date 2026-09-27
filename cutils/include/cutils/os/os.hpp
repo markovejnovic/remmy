@@ -65,7 +65,7 @@ using RawDirent = ::dirent64;
 ///
 /// glibc has no getprogname(3); there this is the basename of argv[0]. Empty
 /// when the name is not known.
-[[nodiscard]] inline auto getprogname() noexcept -> std::string_view {
+[[nodiscard]] inline auto GetProgName() noexcept -> std::string_view {
 #if defined(__GLIBC__)
   const char* name = ::program_invocation_short_name;
 #else

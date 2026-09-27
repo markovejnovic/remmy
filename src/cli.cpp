@@ -97,12 +97,13 @@ auto Argv::Parse() const noexcept -> std::expected<Cli, UsageError> {
 }
 
 auto Argv::ExecutableName() const noexcept -> std::string_view {
-  if (const std::string_view name = cutils::os::getprogname(); !name.empty()) {
+  if (const std::string_view name = cutils::os::GetProgName(); !name.empty()) {
     return name;
   }
+
   const std::string_view argv0 = ProgramName();
-  // npos + 1 wraps to 0, so a name without a slash is kept whole.
   const std::string_view base = argv0.substr(argv0.rfind('/') + 1);
+
   return base.empty() ? detail::kDefaultProgramName : base;
 }
 
