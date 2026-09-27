@@ -347,22 +347,10 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
 }  // namespace
 
 auto main(int argc, char** argv) -> int {
-  const std::span<char* const> args(
-      argv, static_cast<std::size_t>(argc > 0 ? argc : 0));
-  const char* argv0 = args.empty() ? "rm" : args.front();
-  const auto cli = remmy::ParseCli(args.empty() ? args : args.subspan(1));
+  const remmy::Argv args{argc, argv};
+  const auto cli = args.TryParseOrAbort();
   if (!cli) {
-    return ReportUsage(argv0, cli.error());
-  }
-  if (!cli->operands.empty()) {
-    if (const char option = remmy::UnsupportedOption(cli->options);
-        option != '\0') {
-      return ReportUnsupported(argv0, option);
-    }
-    if (cli->options.prompt_once &&
-        PromptOnceWouldAsk(cli->operands, cli->options.recursive)) {
-      return ReportUnsupported(argv0, 'I');
-    }
+    return cli.error();
   }
 
   const std::uint16_t threads = ThreadCount();

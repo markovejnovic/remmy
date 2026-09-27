@@ -1,0 +1,4 @@
+# The root lint build has no tests; use the standalone cutils build:
+#   cmake -S cutils -B build/cutils -G Ninja -DCMAKE_CXX_COMPILER=clang++
+CompileFlags:
+  CompilationDatabase: ../../build/cutils

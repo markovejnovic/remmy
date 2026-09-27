@@ -17,6 +17,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <new>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -192,6 +193,12 @@ class HeapArrayIterator {
   T* ptr_{nullptr};
 };
 
+struct for_overwrite_t {
+  explicit for_overwrite_t() = default;
+};
+
+inline constexpr for_overwrite_t for_overwrite{};
+
 /// @brief A fixed-size, heap-allocated, allocator-aware dynamic array.
 ///
 /// @tparam T Element type (a non-`const` object type).
@@ -235,6 +242,16 @@ class HeapArray {
       : alloc_(alloc) {
     data_ = BuildBlock(alloc_, count, [](Allocator& a, T* loc, size_type) {
       alloc_traits::construct(a, loc);
+    });
+    size_ = count;
+  }
+
+  constexpr HeapArray(for_overwrite_t, size_type count,
+                      const Allocator& alloc = Allocator())
+    requires std::default_initializable<T>
+      : alloc_(alloc) {
+    data_ = BuildBlock(alloc_, count, [](Allocator&, T* loc, size_type) {
+      ::new (static_cast<void*>(loc)) T;
     });
     size_ = count;
   }
@@ -751,6 +768,9 @@ struct NoDefault {
 };
 static_assert(
     !std::constructible_from<cutils::HeapArray<NoDefault>, std::size_t>);
+static_assert(std::constructible_from<HAi, for_overwrite_t, std::size_t>);
+static_assert(!std::constructible_from<cutils::HeapArray<NoDefault>,
+                                       for_overwrite_t, std::size_t>);
 
 static_assert(
     std::same_as<decltype(cutils::HeapArray{

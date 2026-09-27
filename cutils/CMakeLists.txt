@@ -2,6 +2,7 @@
 
 cmake_minimum_required(VERSION 3.28)
 project(cutils VERSION 0.1.0 LANGUAGES CXX)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(CUTILS_BUILD_TESTING "Build cutils tests" ${PROJECT_IS_TOP_LEVEL})
 find_package(Threads REQUIRED)
