@@ -128,7 +128,7 @@ class FileUnlinkWorker {
   /// @note Cli must outlive the worker.
   explicit FileUnlinkWorker(const remmy::Cli& cli,
                             cutils::io::StdoutWriter& removed) noexcept
-      : cli_(cli), removed_(removed) {}
+      : cli_(cli), stdout_(removed) {}
 
   /// @brief The total number of failures that this worker encountered.
   [[nodiscard]] auto Failures() const noexcept -> std::size_t {
@@ -211,7 +211,7 @@ class FileUnlinkWorker {
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) == 0) {
           if (cli_.Options().verbose) {
             std::ignore =
-                cutils::io::PrintLn(removed_, "{}/{}", dir_path, entry.name());
+                cutils::io::PrintLn(stdout_, "{}/{}", dir_path, entry.name());
           }
         } else if (errno != ENOENT) {
           failures_++;
@@ -262,7 +262,7 @@ class FileUnlinkWorker {
 
   auto LogRemoval(int status, std::string_view path) noexcept -> int {
     if (status == 0 && cli_.Options().verbose) {
-      std::ignore = cutils::io::PrintLn(removed_, "{}", path);
+      std::ignore = cutils::io::PrintLn(stdout_, "{}", path);
     }
     return status;
   }
@@ -270,7 +270,7 @@ class FileUnlinkWorker {
   auto LogRemoval(int status, std::string_view dir,
                   std::string_view name) noexcept -> int {
     if (status == 0 && cli_.Options().verbose) {
-      std::ignore = cutils::io::PrintLn(removed_, "{}/{}", dir, name);
+      std::ignore = cutils::io::PrintLn(stdout_, "{}/{}", dir, name);
     }
     return status;
   }
@@ -320,7 +320,7 @@ class FileUnlinkWorker {
   std::size_t failures_ = 0;
 
   /// @brief -v: where removed paths go; null without -v.
-  cutils::io::StdoutWriter& removed_;
+  cutils::io::StdoutWriter& stdout_;
 
   /// @brief Thread-local buffer holding the path of the directory being
   ///        scanned, for -v's lines about its entries.
@@ -443,23 +443,24 @@ auto RunRm(const remmy::Cli& cli) -> int {
   }
 
   const bool force = cli.Options().force;
-  // Declared before the scheduler, so it outlives the workers holding it and
-  // flushes once they are done.
-  const std::size_t removed_capacity =
-      cli.Options().verbose && ::isatty(STDOUT_FILENO) == 0 ? 64 * 1024 : 0;
-  cutils::io::StdoutWriter removed({.shared = removed_capacity, .handle = 0},
-                                   STDOUT_FILENO);
+  cutils::io::StdoutWriter stdout(
+      {.shared = static_cast<std::size_t>(
+           cli.Options().verbose && ::isatty(STDOUT_FILENO) == 0 ? 64 * 1024
+                                                                 : 0),
+       .handle = 0},
+      STDOUT_FILENO);
+
   // -v: operands are logged exactly as typed, and walks start from them.
   const auto log_removed = [&](int status, const char* path) {
     if (status == 0 && cli.Options().verbose) {
-      std::ignore = cutils::io::PrintLn(removed, "{}", path);
+      std::ignore = cutils::io::PrintLn(stdout, "{}", path);
     }
     return status;
   };
 
   const std::uint16_t threads = ThreadCount();
   const std::string_view prog = cli.CommandName();
-  const FileUnlinkWorker prototype(cli, removed);
+  const FileUnlinkWorker prototype(cli, stdout);
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
