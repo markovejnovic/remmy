@@ -339,21 +339,40 @@ jobs:
         with:
           subject-path: dist/*.tar.gz
 
-      # Draft first, publish last: users never see a release with some of its
-      # assets missing. A re-run finishes an existing draft but never touches
-      # a release that was already published.
+      # Draft first, publish last: a release this job creates never shows up
+      # with some of its assets missing. A release published by hand from the
+      # GitHub UI (which is what pushed the tag) gets its assets added instead.
+      # Re-runs are safe: published assets are never replaced, only checked.
       - name: Publish release
         run: |
           if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
-            if [[ "$draft" != true ]]; then
-              echo "::error::release $TAG is already published; bump the version instead"
-              exit 1
-            fi
+            echo "release $TAG exists (draft: $draft)"
           else
             flags=()
             [[ "$PRERELEASE" == true ]] && flags+=(--prerelease)
             gh release create "$TAG" --draft --verify-tag --generate-notes \
               --title "remmy $VERSION" "${flags[@]}"
+            draft=true
           fi
-          gh release upload "$TAG" dist/* --clobber
-          gh release edit "$TAG" --draft=false
+
+          if [[ "$draft" == true ]]; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --draft=false
+            exit 0
+          fi
+
+          published="$(gh release view "$TAG" --json assets \
+            --jq '.assets[] | "\(.name) \(.digest)"')"
+          for file in dist/*; do
+            name="$(basename "$file")"
+            want="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
+            have="$(awk -v n="$name" '$1 == n {print $2}' <<< "$published")"
+            if [[ -z "$have" ]]; then
+              gh release upload "$TAG" "$file"
+            elif [[ "$have" != "$want" ]]; then
+              echo "::error::$name on published release $TAG differs from this build; not replacing it"
+              exit 1
+            else
+              echo "$name already published and identical"
+            fi
+          done
