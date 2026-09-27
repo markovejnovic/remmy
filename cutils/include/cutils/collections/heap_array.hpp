@@ -246,8 +246,12 @@ class HeapArray {
     size_ = count;
   }
 
-  constexpr HeapArray(for_overwrite_t, size_type count,
-                      const Allocator& alloc = Allocator())
+  constexpr HeapArray(for_overwrite_t tag, size_type count)
+    requires std::default_initializable<T> &&
+             std::default_initializable<Allocator>
+      : HeapArray(tag, count, Allocator()) {}
+
+  constexpr HeapArray(for_overwrite_t, size_type count, const Allocator& alloc)
     requires std::default_initializable<T>
       : alloc_(alloc) {
     data_ = BuildBlock(alloc_, count, [](Allocator&, T* loc, size_type) {

@@ -39,7 +39,7 @@ add_compile_options(-fno-exceptions)
 set(CUTILS_BUILD_TESTING OFF)
 add_subdirectory(cutils)
 
-set(REMMY_SOURCES src/main.cpp src/dir_node.cpp)
+set(REMMY_SOURCES src/main.cpp src/cli.cpp src/dir_node.cpp)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
   add_executable(remmy ${REMMY_SOURCES})
   target_link_libraries(remmy PRIVATE cutils::cutils)

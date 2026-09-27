@@ -35,7 +35,7 @@ struct Cli {
 
   /// @brief Arguments considered as operands, ie. all the things that aren't
   ///        options as well as any things that come after `--`.
-  std::span<const char*> operands;
+  std::span<char* const> operands;
 };
 
 /// @brief A command line to answer with the usage and kExitUsage.
@@ -49,7 +49,7 @@ struct UsageError {
   }
 
   /// @brief Get the option character that was the root of the problem, if any.
-  [[nodiscard]] constexpr auto IllegalOption() -> std::optional<char> {
+  [[nodiscard]] constexpr auto IllegalOption() const -> std::optional<char> {
     return illegalOption_;
   }
 
@@ -62,43 +62,43 @@ struct UsageError {
 
 struct Argv {
  public:
-  [[nodiscard]] constexpr Argv(std::size_t argc, const char** argv)
+  [[nodiscard]] constexpr Argv(int argc, char** argv)
       : span_(argv, static_cast<std::size_t>(argc > 0 ? argc : 0)) {}
 
   /// @brief Get the arguments as a span. Includes argv[0].
-  [[nodiscard]] constexpr auto Span() -> std::span<const char*> {
+  [[nodiscard]] constexpr auto Span() const -> std::span<char* const> {
     return span_;
   }
 
   /// @brief Return the span of arguments, excluding argv[0].
-  [[nodiscard]] constexpr auto ArgsSpan() -> std::span<const char*> {
+  [[nodiscard]] constexpr auto ArgsSpan() const -> std::span<char* const> {
     return Span().empty() ? Span() : Span().subspan(1);
   }
 
   /// @brief Get the program name.
-  [[nodiscard]] constexpr auto ProgramName() -> const char* {
+  [[nodiscard]] constexpr auto ProgramName() const -> const char* {
     return Span().empty() ? detail::kDefaultProgramName : Span()[0];
   }
 
   /// @brief Parse the arguments the same way that BSD rm does.
-  auto Parse() noexcept -> std::expected<Cli, UsageError>;
+  auto Parse() const noexcept -> std::expected<Cli, UsageError>;
 
   /// @brief Try to parse the arguments, returning an error code if parsing
   ///        fails.
-  auto TryParseOrAbort() noexcept -> std::expected<Cli, int>;
+  auto TryParseOrAbort() const noexcept -> std::expected<Cli, int>;
 
  private:
   /// @brief Report the "usage: ..." message for a given error.
-  auto ReportUsage(UsageError error);
+  void ReportUsage(UsageError error) const noexcept;
 
   /// @brief Check whether any of the given exceptions are unsupported and
   ///        abort if so.
   ///
   /// @todo Remove this function altogether as we start support more and more
   ///       options.
-  auto ReportIfUnsupported(Cli options) -> std::expected<Cli, int>;
+  auto CheckUnsupported(Cli options) const noexcept -> std::expected<Cli, int>;
 
-  std::span<const char*> span_;
+  std::span<char* const> span_;
 };
 
 }  // namespace remmy

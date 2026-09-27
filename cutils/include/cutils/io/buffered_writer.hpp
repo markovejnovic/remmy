@@ -2,6 +2,7 @@
 #define CUTILS_IO_BUFFERED_WRITER_HPP
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <expected>
@@ -11,6 +12,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <version>
 
@@ -19,24 +21,38 @@
 
 namespace cutils::io {
 
+template <class B>
+concept WriteBuffer =
+    std::ranges::contiguous_range<B> && std::ranges::sized_range<B> &&
+    std::same_as<std::ranges::range_value_t<B>, char>;
+
 /// @brief Writer implementation which buffers data before flushing.
-template <Writer W, class Allocator = std::allocator<char>>
+template <Writer W, WriteBuffer Buffer = HeapArray<char>>
 class BufferedWriter {
  public:
-  using allocator_type = Allocator;
+  using buffer_type = Buffer;
 
   template <class... Args>
-    requires std::default_initializable<Allocator> &&
+    requires std::constructible_from<Buffer, for_overwrite_t, std::size_t> &&
                  std::constructible_from<W, Args...>
   explicit constexpr BufferedWriter(std::size_t capacity, Args&&... args)
       : writer_(std::forward<Args>(args)...), buf_(for_overwrite, capacity) {}
 
-  template <class... Args>
-    requires std::constructible_from<W, Args...>
-  constexpr BufferedWriter(std::allocator_arg_t, const Allocator& alloc,
+  template <class Alloc, class... Args>
+    requires std::constructible_from<Buffer, for_overwrite_t, std::size_t,
+                                     const Alloc&> &&
+                 std::constructible_from<W, Args...>
+  constexpr BufferedWriter(std::allocator_arg_t, const Alloc& alloc,
                            std::size_t capacity, Args&&... args)
       : writer_(std::forward<Args>(args)...),
         buf_(for_overwrite, capacity, alloc) {}
+
+  template <class... Args>
+    requires(!std::constructible_from<Buffer, for_overwrite_t, std::size_t>) &&
+            std::default_initializable<Buffer> &&
+            std::constructible_from<W, Args...>
+  explicit constexpr BufferedWriter(Args&&... args)
+      : writer_(std::forward<Args>(args)...) {}
 
   BufferedWriter(const BufferedWriter&) = delete;
   auto operator=(const BufferedWriter&) -> BufferedWriter& = delete;
@@ -48,7 +64,7 @@ class BufferedWriter {
 
   auto operator=(BufferedWriter&&) -> BufferedWriter& = delete;
 
-  ~BufferedWriter() = default;
+  ~BufferedWriter() { std::ignore = Flush(); }
 
   [[nodiscard]] auto Write(std::string_view sv) noexcept
       -> std::expected<std::size_t, std::errc> {
@@ -58,13 +74,15 @@ class BufferedWriter {
   template <PieceRange R>
   [[nodiscard]] auto WriteMany(R&& pieces) noexcept
       -> std::expected<void, std::errc> {
+    const std::ranges::ref_view all(pieces);
     const std::size_t total = std::ranges::fold_left(
-        pieces | std::views::transform(
-                     [](std::string_view piece) { return piece.size(); }),
+        all | std::views::transform(
+                  [](std::string_view piece) { return piece.size(); }),
         0uz, std::plus{});
 
-    if (total <= buf_.size() - used_) {
-      std::ranges::copy(pieces | std::views::join, buf_.data() + used_);
+    if (total <= std::ranges::size(buf_) - used_) {
+      std::ranges::copy(all | std::views::join,
+                        std::ranges::data(buf_) + used_);
       used_ += total;
       return {};
     }
@@ -73,7 +91,7 @@ class BufferedWriter {
     const std::string_view buffered = Buffered();
     used_ = 0;
     return writer_.WriteMany(
-        std::views::concat(std::views::single(buffered), pieces));
+        std::views::concat(std::views::single(buffered), all));
 #else
     return Flush().and_then(
         [&] { return writer_.WriteMany(std::forward<R>(pieces)); });
@@ -91,19 +109,23 @@ class BufferedWriter {
   }
 
   [[nodiscard]] constexpr auto get_allocator() const noexcept
-      -> allocator_type {
+    requires requires(const Buffer& buf) { buf.get_allocator(); }
+  {
     return buf_.get_allocator();
   }
 
  private:
   [[nodiscard]] auto Buffered() const noexcept -> std::string_view {
-    return {buf_.data(), used_};
+    return {std::ranges::data(buf_), used_};
   }
 
   W writer_;
-  HeapArray<char, Allocator> buf_;
+  Buffer buf_;
   std::size_t used_{0};
 };
+
+template <Writer W, std::size_t N>
+using InlineBufferedWriter = BufferedWriter<W, std::array<char, N>>;
 
 }  // namespace cutils::io
 

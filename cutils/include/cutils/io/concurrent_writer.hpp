@@ -9,38 +9,18 @@
 #include <system_error>
 #include <utility>
 
+#include "cutils/collections/heap_array.hpp"
 #include "cutils/io/buffered_writer.hpp"
 #include "cutils/io/mutex_writer.hpp"
 #include "cutils/io/writer.hpp"
+#include "cutils/io/writer_ref.hpp"
 
 namespace cutils::io {
 
 template <Writer W, class Allocator = std::allocator<char>>
 class ConcurrentWriter {
-  using Shared = MutexWriter<BufferedWriter<W, Allocator>>;
-
-  class SharedRef {
-   public:
-    explicit constexpr SharedRef(Shared& shared) noexcept : shared_(&shared) {}
-
-    [[nodiscard]] auto Write(std::string_view sv) noexcept
-        -> std::expected<std::size_t, std::errc> {
-      return shared_->Write(sv);
-    }
-
-    template <PieceRange R>
-    [[nodiscard]] auto WriteMany(R&& pieces) noexcept
-        -> std::expected<void, std::errc> {
-      return shared_->WriteMany(std::forward<R>(pieces));
-    }
-
-    [[nodiscard]] auto Flush() noexcept -> std::expected<void, std::errc> {
-      return {};
-    }
-
-   private:
-    Shared* shared_;
-  };
+  using Buffer = HeapArray<char, Allocator>;
+  using Shared = MutexWriter<BufferedWriter<W, Buffer>>;
 
  public:
   struct Capacity {
@@ -55,7 +35,7 @@ class ConcurrentWriter {
     auto operator=(const Handle&) -> Handle& = delete;
     auto operator=(Handle&&) -> Handle& = delete;
 
-    ~Handle() { (void)writer_.Flush(); }
+    ~Handle() = default;
 
     [[nodiscard]] auto Write(std::string_view sv) noexcept
         -> std::expected<std::size_t, std::errc> {
@@ -81,7 +61,7 @@ class ConcurrentWriter {
                   owner.shared_) {}
 
     ConcurrentWriter* owner_;
-    BufferedWriter<SharedRef, Allocator> writer_;
+    BufferedWriter<WriterRef<Shared>, Buffer> writer_;
   };
 
   template <class... Args>
@@ -105,7 +85,7 @@ class ConcurrentWriter {
   auto operator=(const ConcurrentWriter&) -> ConcurrentWriter& = delete;
   auto operator=(ConcurrentWriter&&) -> ConcurrentWriter& = delete;
 
-  ~ConcurrentWriter() { (void)shared_.Flush(); }
+  ~ConcurrentWriter() = default;
 
   [[nodiscard]] auto MakeHandle() -> Handle { return Handle(*this); }
 

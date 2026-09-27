@@ -1,8 +1,12 @@
 #include "cli.hpp"
 
+#include <cstddef>
 #include <expected>
 #include <optional>
+#include <string_view>
+#include <tuple>
 
+#include "cutils/io/print.hpp"
 #include "cutils/io/stderr_writer.hpp"
 
 namespace remmy {
@@ -51,6 +55,8 @@ constexpr auto ApplyOption(Options& options, char letter) noexcept -> bool {
 /// @brief The error code to throw in case of a bad arg parsing.
 constexpr int kExitUsage = 64;
 
+constexpr int kExitUnsupported = 1;
+
 /// @brief The usage message to print in case of bad arg parsing.
 constexpr std::string_view kUsageMsg =
     "usage: rm [-f | -i] [-dIPRrvWx] file ...\n"
@@ -58,7 +64,7 @@ constexpr std::string_view kUsageMsg =
 
 }  // namespace
 
-auto Argv::Parse() noexcept -> std::expected<Cli, UsageError> {
+auto Argv::Parse() const noexcept -> std::expected<Cli, UsageError> {
   Cli cli;
   std::size_t index;
 
@@ -87,7 +93,7 @@ auto Argv::Parse() noexcept -> std::expected<Cli, UsageError> {
   return cli;
 }
 
-auto Argv::TryParseOrAbort() noexcept -> std::expected<Cli, int> {
+auto Argv::TryParseOrAbort() const noexcept -> std::expected<Cli, int> {
   const auto parsed = Parse();
 
   if (!parsed) {
@@ -103,30 +109,31 @@ auto Argv::TryParseOrAbort() noexcept -> std::expected<Cli, int> {
 
   // TODO(markovejnovic): This is a temporary hack since remmy doesn't support
   //                      all of rm's flags yet.
-  return CheckUnsupported(parsed);
+  return CheckUnsupported(*parsed);
 }
 
-void Argv::ReportUsage(UsageError err) {
+void Argv::ReportUsage(UsageError err) const noexcept {
   if (err.IllegalOption()) {
-    cutils::io::stderr_writer.PrintLn("{}: illegal option -- {}\n{}",
-                                      ProgramName(), *err.IllegalOption(),
-                                      kUsageMsg);
+    std::ignore = cutils::io::PrintLn(
+        cutils::io::stderr_writer, "{}: illegal option -- {}\n{}",
+        ProgramName(), *err.IllegalOption(), kUsageMsg);
   } else {
-    cutils::io::stderr_writer.PrintLn("{}", kUsageMsg);
+    std::ignore =
+        cutils::io::PrintLn(cutils::io::stderr_writer, "{}", kUsageMsg);
   }
 }
 
-auto Argv::CheckUnsupported(Cli cli) noexcept -> std::expected<Cli, int> {
+auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
   if (cli.options.interactive) {
-    return std::unexpected('i');
+    return std::unexpected(kExitUnsupported);
   }
 
   if (cli.options.undelete && !cli.options.recursive) {
-    return std::unexpected('W');
+    return std::unexpected(kExitUnsupported);
   }
 
   if (cli.options.one_file_system && cli.options.recursive) {
-    return std::unexpected('x');
+    return std::unexpected(kExitUnsupported);
   }
 
   return cli;

@@ -45,30 +45,33 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
-#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cutils/io/buffered_writer.hpp>
+#include <cutils/io/print.hpp>
+#include <cutils/io/stderr_writer.hpp>
+#include <cutils/io/stdin_reader.hpp>
+#include <cutils/io/writer_ref.hpp>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
 #include <cutils/os/limits/fd.hpp>
 #include <cutils/os/os.hpp>
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
-#include <initializer_list>
-#include <print>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 #include "cli.hpp"
@@ -127,9 +130,10 @@ class FileUnlinkWorker {
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
         failures_++;
-        std::println(stderr, "cannot open '{}': {}",
-                     task->PathInto(path_buffer_),
-                     std::strerror(static_cast<int>(err.code)));
+        std::ignore = cutils::io::PrintLn(
+            cutils::io::stderr_writer, "cannot open '{}': {}",
+            task->PathInto(path_buffer_),
+            std::strerror(static_cast<int>(err.code)));
         MaybeCleanupDirNode(task);
       }
 
@@ -149,9 +153,10 @@ class FileUnlinkWorker {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
         failures_++;
-        std::println(stderr, "cannot read '{}': {}",
-                     task->PathInto(path_buffer_),
-                     std::strerror(static_cast<int>(read.error())));
+        std::ignore = cutils::io::PrintLn(
+            cutils::io::stderr_writer, "cannot read '{}': {}",
+            task->PathInto(path_buffer_),
+            std::strerror(static_cast<int>(read.error())));
         break;
       }
 
@@ -168,9 +173,10 @@ class FileUnlinkWorker {
                                 AT_SYMLINK_NOFOLLOW) != 0) {
           if (errno != ENOENT) {
             failures_++;
-            std::println(stderr, "cannot stat '{}/{}': {}",
-                         task->PathInto(path_buffer_), entry.name(),
-                         std::strerror(errno));
+            std::ignore = cutils::io::PrintLn(
+                cutils::io::stderr_writer, "cannot stat '{}/{}': {}",
+                task->PathInto(path_buffer_), entry.name(),
+                std::strerror(errno));
           }
           continue;
         }
@@ -181,9 +187,9 @@ class FileUnlinkWorker {
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
             errno != ENOENT) {
           failures_++;
-          std::println(stderr, "cannot remove '{}/{}': {}",
-                       task->PathInto(path_buffer_), entry.name(),
-                       std::strerror(errno));
+          std::ignore = cutils::io::PrintLn(
+              cutils::io::stderr_writer, "cannot remove '{}/{}': {}",
+              task->PathInto(path_buffer_), entry.name(), std::strerror(errno));
         }
         continue;
       }
@@ -198,9 +204,10 @@ class FileUnlinkWorker {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
           failures_++;
-          std::println(stderr, "cannot open '{}/{}': {}",
-                       task->PathInto(path_buffer_), entry.name(),
-                       std::strerror(static_cast<int>(opened.error().code)));
+          std::ignore = cutils::io::PrintLn(
+              cutils::io::stderr_writer, "cannot open '{}/{}': {}",
+              task->PathInto(path_buffer_), entry.name(),
+              std::strerror(static_cast<int>(opened.error().code)));
           continue;
         }
       }
@@ -241,8 +248,9 @@ class FileUnlinkWorker {
 
       if (current->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT) {
         failures_++;
-        std::println(stderr, "cannot remove '{}': {}", path_buffer_,
-                     std::strerror(errno));
+        std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
+                                          "cannot remove '{}': {}",
+                                          path_buffer_, std::strerror(errno));
       }
 
       delete current;
@@ -266,74 +274,73 @@ constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
   return last == "." || last == "..";
 }
 
-/// @brief Writes the pieces to stderr in one writev(2), ignoring failures.
-///
-/// Unlike std::print, this cannot throw (which under -fno-exceptions would
-/// abort) when stderr is closed or full: rm itself exits normally then.
-auto WriteStderr(std::initializer_list<std::string_view> pieces) noexcept
-    -> void {
-  static constexpr std::size_t kMaxPieces = 8;
-  std::array<iovec, kMaxPieces> iov{};
-  std::size_t count = 0;
-  for (const std::string_view piece : pieces) {
-    if (count == iov.size()) {
-      break;
-    }
-    // writev only reads the buffers; iov_base is merely declared mutable.
-    iov[count++] = iovec{.iov_base = const_cast<char*>(piece.data()),
-                         .iov_len = piece.size()};
-  }
-  while (::writev(STDERR_FILENO, iov.data(), static_cast<int>(count)) < 0 &&
-         errno == EINTR) {
-  }
-}
-
-/// @brief Prints BSD rm's answer to a rejected command line; returns 64.
-///
-/// Like getopt(3), the illegal-option line names argv[0] exactly as given.
-auto ReportUsage(std::string_view argv0, remmy::UsageError error) noexcept
-    -> int {
-  if (error.illegal_option != '\0') {
-    WriteStderr({argv0, ": illegal option -- ",
-                 std::string_view(&error.illegal_option, 1), "\n",
-                 remmy::kUsage});
-  } else {
-    WriteStderr({remmy::kUsage});
-  }
-  return remmy::kExitUsage;
-}
-
-/// @brief Whether BSD rm's -I would ask before removing these operands.
+/// @brief Asks BSD rm's -I question when it would; true to go ahead.
 ///
 /// rm asks once when, among the operands that exist (lstat(2)) and are not
 /// "." or "..", there is a directory under -r or -R, or more than three in
-/// all. Otherwise -I changes nothing.
-auto PromptOnceWouldAsk(std::span<char* const> operands,
-                        bool recursive) noexcept -> bool {
+/// all. Only the first character of each answer line counts; anything but y
+/// or n asks again, and end of input declines.
+auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
+    -> bool {
   static constexpr std::size_t kMaxSilentOperands = 3;
-  std::size_t existing = 0;
+  static constexpr std::size_t kPromptBuffer = 256;
+  auto& in = cutils::io::stdin_reader;
+
+  std::size_t dirs = 0;
+  std::size_t files = 0;
+  std::string_view dir_name;
   for (const char* path : operands) {
     struct stat path_stat;
     if (IsDotOrDotDotOperand(path) ||
         cutils::os::lstat(path, &path_stat) != 0) {
       continue;
     }
-    if (recursive && S_ISDIR(path_stat.st_mode)) {
+    if (S_ISDIR(path_stat.st_mode)) {
+      ++dirs;
+      dir_name = path;
+    } else {
+      ++files;
+    }
+  }
+
+  const bool ask_recursive = recursive && dirs > 0;
+  if (!ask_recursive && dirs + files <= kMaxSilentOperands) {
+    return true;
+  }
+
+  while (true) {
+    cutils::io::InlineBufferedWriter<
+        cutils::io::WriterRef<decltype(cutils::io::stderr_writer)>,
+        kPromptBuffer>
+        line(cutils::io::stderr_writer);
+    if (ask_recursive) {
+      std::ignore = cutils::io::Print(line, "recursively remove");
+      if (dirs == 1) {
+        std::ignore = cutils::io::Print(line, " {}", dir_name);
+      } else {
+        std::ignore = cutils::io::Print(line, " {} dirs", dirs);
+      }
+      if (files == 1) {
+        std::ignore = cutils::io::Print(line, " and 1 file");
+      } else if (files > 1) {
+        std::ignore = cutils::io::Print(line, " and {} files", files);
+      }
+    } else {
+      std::ignore = cutils::io::Print(line, "remove {} files", dirs + files);
+    }
+    std::ignore = cutils::io::Print(line, "? ");
+    std::ignore = line.Flush();
+
+    const std::optional<char> first = in.ReadByte();
+    const bool line_ended = first == '\n' || (first && in.SkipPast('\n'));
+
+    if (first == 'y' || first == 'Y') {
       return true;
     }
-    ++existing;
+    if (first == 'n' || first == 'N' || !line_ended) {
+      return false;
+    }
   }
-  return existing > kMaxSilentOperands;
-}
-
-/// @brief Refuses a command line remmy cannot yet honour safely; returns 1.
-///
-/// Ignoring -i, -I, -W or -x would remove what rm would ask about or keep, so
-/// nothing is touched instead.
-auto ReportUnsupported(std::string_view argv0, char option) noexcept -> int {
-  WriteStderr({argv0, ": -", std::string_view(&option, 1),
-               ": not supported yet; nothing was removed\n"});
-  return 1;
 }
 
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
@@ -353,38 +360,47 @@ auto main(int argc, char** argv) -> int {
     return cli.error();
   }
 
+  if (cli->options.prompt_once &&
+      !ConfirmPromptOnce(cli->operands, cli->options.recursive)) {
+    return 1;
+  }
+
   const std::uint16_t threads = ThreadCount();
   Scheduler scheduler(threads);
 
   std::size_t failures = 0;
   for (const char* path : cli->operands) {
     if (IsDotOrDotDotOperand(path)) {
-      std::println(stderr,
-                   "cannot remove '{}': '.' and '..' may not be removed", path);
+      std::ignore = cutils::io::PrintLn(
+          cutils::io::stderr_writer,
+          "cannot remove '{}': '.' and '..' may not be removed", path);
       ++failures;
       continue;
     }
 
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
-      std::println(stderr, "cannot remove '{}': {}", path,
-                   std::strerror(errno));
+      std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
+                                        "cannot remove '{}': {}", path,
+                                        std::strerror(errno));
       ++failures;
       continue;
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
       if (cutils::os::unlink(path) != 0) {
-        std::println(stderr, "cannot remove '{}': {}", path,
-                     std::strerror(errno));
+        std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
+                                          "cannot remove '{}': {}", path,
+                                          std::strerror(errno));
         ++failures;
       }
       continue;
     }
 
     if (!cli->options.recursive) {
-      std::println(stderr, "cannot remove '{}': {}", path,
-                   std::strerror(EISDIR));
+      std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
+                                        "cannot remove '{}': {}", path,
+                                        std::strerror(EISDIR));
       ++failures;
       continue;
     }
@@ -392,8 +408,9 @@ auto main(int argc, char** argv) -> int {
     auto dirfd =
         cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (!dirfd) {
-      std::println(stderr, "cannot open '{}': {}", path,
-                   std::strerror(static_cast<int>(dirfd.error().code)));
+      std::ignore = cutils::io::PrintLn(
+          cutils::io::stderr_writer, "cannot open '{}': {}", path,
+          std::strerror(static_cast<int>(dirfd.error().code)));
       ++failures;
       continue;
     }
