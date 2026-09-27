@@ -234,7 +234,7 @@ class FileUnlinkWorker {
   /// This tries to delete a DirNode if there are no more DirNode's referencing
   /// the given one. It cleans up its parents equivalently.
   void MaybeCleanupDirNode(DirNode* node) noexcept {
-    auto chain = node->ParentsMut();
+    const auto chain = node->ParentsMut();
 
     for (auto it = chain.begin(); it != chain.end();) {
       DirNode* current = *it;

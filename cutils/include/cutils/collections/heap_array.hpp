@@ -78,7 +78,7 @@ class HeapArrayIterator {
 
   template <typename U>
     requires std::same_as<U, value_type> && std::is_const_v<T>
-  constexpr HeapArrayIterator(  // NOLINT(google-explicit-constructor)
+  constexpr HeapArrayIterator(  // NOLINT(google-explicit-constructor,misc-explicit-constructor)
       const HeapArrayIterator<U>& o) noexcept
       : ptr_(o.ptr_) {}
 

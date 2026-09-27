@@ -101,7 +101,7 @@ template <class... Args>
 struct FormatString {
   template <class S>
     requires std::convertible_to<const S&, std::string_view>
-  consteval FormatString(  // NOLINT(google-explicit-constructor)
+  consteval FormatString(  // NOLINT(google-explicit-constructor,misc-explicit-constructor)
       const S& s)
       : str(s) {
     std::size_t holes = 0;
