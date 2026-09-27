@@ -48,8 +48,8 @@ source ~/.bashrc
 
 **Remmy is donationware.** That means that if you like `remmy`, if you like my
 work and if you want to support remmy or me, you *should* donate. I like money
-but I don't need it. **There are people who do**. Here are some institutions
-you can consider:
+as much as the next person, but I don't need it. **There are people who do**.
+Here are some institutions you can consider:
 
 - 🌍 [United World College](https://uwc.org/support-us/) transformed my life by
   taking me from a backwater swamp and opening my eyes to different cultures,
