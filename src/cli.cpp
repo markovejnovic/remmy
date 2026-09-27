@@ -152,6 +152,9 @@ auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
   if (cli.Options().undelete && !cli.Options().recursive) {
     return refuse('W');
   }
+  if (cli.Options().one_file_system && cli.Options().recursive) {
+    return refuse('x');
+  }
 
   return cli;
 }

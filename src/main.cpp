@@ -388,19 +388,6 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   }
 }
 
-/// @brief Whether BSD rm's -x (with -r or -R) could keep anything of these
-///        operands: only a walk crosses devices, so only when one of them is
-///        a directory (lstat(2)) that rm would walk, not "." or "..".
-auto OneFileSystemWouldMatter(std::span<char* const> operands) noexcept
-    -> bool {
-  return std::ranges::any_of(operands, [](const char* path) {
-    struct stat path_stat;
-    return !IsDotOrDotDotOperand(path) &&
-           cutils::os::lstat(path, &path_stat) == 0 &&
-           S_ISDIR(path_stat.st_mode);
-  });
-}
-
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -415,14 +402,6 @@ auto main(int argc, char** argv) -> int {
   const auto cli = remmy::Argv{argc, argv}.TryParseOrAbort();
   if (!cli) {
     return cli.error();
-  }
-
-  if (cli->Options().one_file_system && cli->Options().recursive &&
-      OneFileSystemWouldMatter(cli->Operands())) {
-    std::ignore = cutils::io::PrintLn(
-        cutils::io::stderr_writer,
-        "{}: -x: not supported yet; nothing was removed", cli->ProgramName());
-    return 1;
   }
 
   if (cli->Options().prompt_once &&
