@@ -434,6 +434,15 @@ auto RunRm(const remmy::Cli& cli) -> int {
     }
 
     if (!cli.Options().recursive) {
+      if (cli.Options().dir) {
+        if (cutils::os::rmdir(path) != 0 && (!force || errno != ENOENT)) {
+          WarnAt(prog, path, errno);
+          ++failures;
+        }
+
+        continue;
+      }
+
       std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
                                         "{}: {}: is a directory", prog, path);
       ++failures;
