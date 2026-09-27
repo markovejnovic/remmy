@@ -15,6 +15,22 @@
 namespace remmy {
 
 struct DirNode;
+class Walk;
+
+class ReportOnce {
+ public:
+  /// @brief True for the one caller that gets to report.
+  [[nodiscard]] auto Claim() noexcept -> bool {
+    return !claimed_.exchange(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] auto Claimed() const noexcept -> bool {
+    return claimed_.load(std::memory_order_relaxed);
+  }
+
+ private:
+  std::atomic<bool> claimed_{false};
+};
 
 template <typename NodeT>
 class BasicParentChain;
@@ -47,7 +63,7 @@ struct DirNode {
   /// a child of it, and read by whichever worker drops its last reference
   /// (see `remaining_children_dirs_`). Whoever sets it first reports the
   /// directory. It sits in the padding after `fd_`, so it costs no space.
-  std::atomic<bool> unsearchable_{false};
+  ReportOnce unsearchable_;
 
   //// @brief Pointer to the parent DirNode.
   ///
@@ -93,16 +109,16 @@ struct DirNode {
   /// This also acts as the refcount which keeps the DirNode alive in memory.
   std::atomic<std::uint32_t> remaining_children_dirs_;
 
-  /// @brief The index of the operand whose walk found this directory.
-  std::uint32_t operand_;
+  /// @brief The walk that found this directory.
+  const Walk& walk_;
 
   explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name,
-                   std::uint32_t operand)
+                   const Walk& walk)
       : fd_(std::move(fd)),
         parent_(parent),
         name_(std::move(name)),
         remaining_children_dirs_(1),
-        operand_(operand) {}
+        walk_(walk) {}
 
   /// @brief Walk the parent chain to build the full path into the given
   ///        output buffer.
@@ -126,19 +142,19 @@ struct DirNode {
   ///
   /// @param scratch A scratch buffer which this utility uses to compute
   ///                the path to open.
-  /// @param root When not null, the root of the walk, open, which the path
-  ///             is then taken relative to rather than to the operand as
-  ///             typed.
   ///
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
-  auto Open(std::string& scratch, const cutils::os::Fd* root = nullptr) noexcept
+  auto Open(std::string& scratch) noexcept
       -> std::expected<void, cutils::os::OpenError>;
 
   /// @brief Remove this (by now empty) directory.
   ///
-  /// @param scratch A scratch buffer; it holds this node's path afterwards.
-  auto RemoveEmpty(std::string& scratch,
-                   const cutils::os::Fd* root = nullptr) const noexcept -> int;
+  /// @param scratch A scratch buffer for the path handed to the kernel.
+  auto RemoveEmpty(std::string& scratch) const noexcept -> int;
+
+  /// @brief Looks this directory up without following it: 0 when that
+  ///        works, or else errno.
+  auto Lookup(std::string& scratch) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the

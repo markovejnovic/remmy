@@ -68,6 +68,7 @@
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/variant.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -81,6 +82,8 @@
 
 #include "cli.hpp"
 #include "dir_node.hpp"
+#include "operand.hpp"
+#include "walk.hpp"
 
 namespace {
 
@@ -124,26 +127,6 @@ auto LogIfRemoved(const remmy::Cli& cli, cutils::io::StdoutWriter& out,
   return status;
 }
 
-/// @brief What the workers know about the walk of one operand.
-///
-/// main fills an operand's entry in before it submits the operand's root, so
-/// the workers only ever read it.
-struct WalkRoot {
-  /// @brief -x: the device of the operand, which the walk does not leave.
-  dev_t device = 0;
-
-  /// @brief Whether the directories below the root are reached through the
-  ///        root's descriptor, which stays open for the walk, rather than
-  ///        through the operand as typed.
-  ///
-  /// Set for an operand that goes through a symlink ("l/", "e/l/e"), which
-  /// the walk may remove: a link to "." or ".." lies inside the tree it
-  /// leads to. rm chdirs into the root, so its walk does not depend on the
-  /// way in once it is in. The root itself is still removed by its typed
-  /// name, as rm removes it, so a link removed on the way makes that fail.
-  bool relative = false;
-};
-
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.
 ///
 /// Do note that this type is **stateful** across multiple tasks. The scheduler
@@ -159,9 +142,8 @@ class FileUnlinkWorker {
   /// @brief Create a worker.
   /// @note Cli must outlive the worker.
   explicit FileUnlinkWorker(const remmy::Cli& cli,
-                            cutils::io::StdoutWriter& removed,
-                            std::span<const WalkRoot> roots) noexcept
-      : cli_(cli), stdout_(removed), roots_(roots) {}
+                            cutils::io::StdoutWriter& removed) noexcept
+      : cli_(cli), stdout_(removed) {}
 
   /// @brief The total number of failures that this worker encountered.
   [[nodiscard]] auto Failures() const noexcept -> std::size_t {
@@ -173,7 +155,7 @@ class FileUnlinkWorker {
   /// This function is called by the scheduler periodically as new tasks are
   /// admitted into the scheduler.
   void Process(DirNode* task, auto& ctx) noexcept {
-    auto open_result = task->Open(path_buffer_, RootOf(task));
+    auto open_result = task->Open(kernel_buffer_);
     if (!open_result) {
       const cutils::os::OpenError err = open_result.error();
       if (err.retryable) {
@@ -188,9 +170,10 @@ class FileUnlinkWorker {
         // its parent's count of it is dropped.
         DirNode* parent = task->parent_;
         const int error = static_cast<int>(err.code);
-        const char* path = task->PathInto(path_buffer_);
-        const int lookup =
-            error == ENOENT || error == EACCES ? Lookup(task, path) : 0;
+        task->PathInto(path_buffer_);
+        const int lookup = error == ENOENT || error == EACCES
+                               ? task->Lookup(kernel_buffer_)
+                               : 0;
         // Gone, as in Vanished.
         const bool vanished = error == ENOENT && lookup == ENOENT;
         if (error == EACCES && lookup == EACCES && parent != nullptr) {
@@ -218,44 +201,12 @@ class FileUnlinkWorker {
     if (!cli_.Options().one_file_system || !OnOtherDevice(task)) {
       Scan(task, ctx);
     }
-    // A root the walk reaches its directories through stays open until it
-    // is removed.
-    if (task->parent_ != nullptr || !roots_[task->operand_].relative) {
-      task->fd_.Close();
-    }
+    task->fd_.Close();
 
     MaybeCleanupDirNode(task);
   }
 
  private:
-  /// @brief The descriptor of the root of `node`'s walk when `node` is to be
-  ///        reached through it (see WalkRoot::relative), or null when by its
-  ///        path from the operand.
-  [[nodiscard]] auto RootOf(const DirNode* node) const noexcept
-      -> const cutils::os::Fd* {
-    if (node->parent_ == nullptr || !roots_[node->operand_].relative) {
-      return nullptr;
-    }
-    const DirNode* root = node;
-    while (root->parent_ != nullptr) {
-      root = root->parent_;
-    }
-    return &root->fd_;
-  }
-
-  /// @brief Looks `node`, whose diagnostics print `path`, up without
-  ///        following it: 0 when that works, or else errno.
-  auto Lookup(const DirNode* node, const char* path) noexcept -> int {
-    const cutils::os::Fd* root = RootOf(node);
-    struct stat node_stat;
-    const int status =
-        root == nullptr
-            ? cutils::os::lstat(path, &node_stat)
-            : cutils::os::fstatat(*root, node->PathInto(relative_buffer_, "."),
-                                  &node_stat, AT_SYMLINK_NOFOLLOW);
-    return status == 0 ? 0 : errno;
-  }
-
   /// @brief Whether the entry `name` of `task`, which the listing of `task`
   ///        returned and an open of just failed with ENOENT, is not there
   ///        to be looked up either: fts passes over such a name without a
@@ -276,7 +227,7 @@ class FileUnlinkWorker {
     }
     struct stat dir_stat;
     return cutils::os::fstatat(task->fd_, ".", &dir_stat, 0) == 0 &&
-           dir_stat.st_dev != roots_[task->operand_].device;
+           dir_stat.st_dev != task->walk_.Device();
   }
 
   /// @brief Whether a failure with `error` on the entry `name` of `task`
@@ -303,7 +254,7 @@ class FileUnlinkWorker {
   ///        search: once, as "<dir>: Permission denied", and without
   ///        removing it (see DirNode::unsearchable_).
   auto LeaveUnsearchable(DirNode* task) noexcept -> void {
-    if (task->unsearchable_.exchange(true, std::memory_order_relaxed)) {
+    if (!task->unsearchable_.Claim()) {
       return;
     }
     failures_++;
@@ -405,7 +356,7 @@ class FileUnlinkWorker {
       // scan reference (held until Finish, below) keeps
       // `remaining_children_dirs_` from reaching zero mid-scan regardless.
       auto* child = new DirNode(std::move(child_fd), task,
-                                std::string{entry.name()}, task->operand_);
+                                std::string{entry.name()}, task->walk_);
       task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
       const std::size_t tier =
           child->fd_.IsOpen() ? kRunnable : kAwaitingDescriptor;
@@ -418,7 +369,7 @@ class FileUnlinkWorker {
   }
 
   auto RemoveEmptyLogged(const DirNode* node) noexcept -> int {
-    const int status = node->RemoveEmpty(relative_buffer_, RootOf(node));
+    const int status = node->RemoveEmpty(kernel_buffer_);
     return LogIfRemoved(cli_, stdout_, status, "{}",
                         node->PathInto(path_buffer_));
   }
@@ -441,7 +392,7 @@ class FileUnlinkWorker {
       std::atomic_thread_fence(std::memory_order_acquire);
 
       const bool root = current->parent_ == nullptr;
-      if (!current->unsearchable_.load(std::memory_order_relaxed)) {
+      if (!current->unsearchable_.Claimed()) {
         // rm reports an operand that is gone by the time it is removed (a
         // walk through "l/" can remove the link l), unless under -f.
         if (RemoveEmptyLogged(current) != 0 &&
@@ -471,16 +422,13 @@ class FileUnlinkWorker {
   /// @brief -v: where removed paths go; null without -v.
   cutils::io::StdoutWriter& stdout_;
 
-  /// @brief The operands' walks, indexed by DirNode::operand_.
-  std::span<const WalkRoot> roots_;
-
   /// @brief Thread-local buffer holding the path of the directory being
   ///        scanned, for -v's lines about its entries.
   std::string scan_path_;
 
-  /// @brief Thread-local buffer for a path relative to the root of a walk
-  ///        (see WalkRoot::relative).
-  std::string relative_buffer_;
+  /// @brief Thread-local buffer for the path handed to the kernel (see
+  ///        Walk::PathOf).
+  std::string kernel_buffer_;
 };
 
 using Scheduler =
@@ -492,8 +440,8 @@ using Scheduler =
 /// directory under -r or -R, or more than three in all. Only the first
 /// character of each answer line counts; anything but y or n asks again, and
 /// end of input declines.
-auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
-    -> bool {
+auto ConfirmPromptOnce(std::ranges::input_range auto operands,
+                       bool recursive) noexcept -> bool {
   static constexpr std::size_t kMaxSilentOperands = 3;
   static constexpr std::size_t kPromptBuffer = 256;
   auto& in = cutils::io::stdin_reader;
@@ -501,14 +449,14 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   std::size_t dirs = 0;
   std::size_t files = 0;
   std::string_view dir_name;
-  for (const char* path : operands) {
+  for (const remmy::Operand operand : operands) {
     struct stat path_stat;
-    if (cutils::os::lstat(path, &path_stat) != 0) {
+    if (cutils::os::lstat(operand.CStr(), &path_stat) != 0) {
       continue;
     }
     if (S_ISDIR(path_stat.st_mode)) {
       ++dirs;
-      dir_name = path;
+      dir_name = operand.Path();
     } else {
       ++files;
     }
@@ -584,48 +532,9 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
   return 0;
 }
 
-/// @brief Whether `path` goes through a symlink before its last component:
-///        a directory on the way to it is one.
-auto ThroughSymlink(std::string_view path) -> bool {
-  while (path.size() > 1 && path.back() == '/') {
-    path.remove_suffix(1);
-  }
-  std::string prefix;
-  for (std::size_t slash = path.find('/', 1); slash != std::string_view::npos;
-       slash = path.find('/', slash + 1)) {
-    if (path[slash - 1] == '/') {
-      continue;
-    }
-    prefix.assign(path.substr(0, slash));
-    struct stat prefix_stat;
-    if (cutils::os::lstat(prefix.c_str(), &prefix_stat) == 0 &&
-        S_ISLNK(prefix_stat.st_mode)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/// @brief Whether `path` follows a symlink with its trailing slash: "l/",
-///        where `l` is not a directory itself.
-auto FollowsTrailingLink(std::string_view path) -> bool {
-  std::string_view entry = path;
-  while (entry.size() > 1 && entry.back() == '/') {
-    entry.remove_suffix(1);
-  }
-  if (entry.size() == path.size()) {
-    return false;
-  }
-  const std::string terminated(entry);
-  struct stat entry_stat;
-  return cutils::os::lstat(terminated.c_str(), &entry_stat) == 0 &&
-         !S_ISDIR(entry_stat.st_mode);
-}
-
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path,
-              std::size_t operand) -> void {
-  auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path},
-                           static_cast<std::uint32_t>(operand));
+              const remmy::Walk& walk) -> void {
+  auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path}, walk);
   if (!scheduler.Submit(task)) {
     delete task;
   }
@@ -645,74 +554,72 @@ auto RunRm(const remmy::Cli& cli) -> int {
        .handle = 0},
       STDOUT_FILENO);
 
-  const std::span<char* const> operands = cli.Operands();
   // Declared before the scheduler, so it outlives the workers reading it.
-  std::vector<WalkRoot> roots(operands.size());
+  std::deque<remmy::Walk> walks;
 
   const std::uint16_t threads = ThreadCount();
   const std::string_view prog = cli.CommandName();
-  const FileUnlinkWorker prototype(cli, stdout, roots);
+  const FileUnlinkWorker prototype(cli, stdout);
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
-  for (std::size_t operand = 0; operand < operands.size(); ++operand) {
-    const char* path = operands[operand];
-    struct stat path_stat;
-    if (cutils::os::lstat(path, &path_stat) != 0) {
-      if (const int error = errno;
-          !(force && cli.Options().recursive && cutils::os::GetEUid() != 0) &&
-          (!force || error != ENOENT)) {
-        WarnAt(prog, path, error);
-        ++failures;
-      }
-      continue;
-    }
-
-    if (!S_ISDIR(path_stat.st_mode)) {
-      if (LogIfRemoved(cli, stdout, cutils::os::unlink(path), "{}", path) !=
-          0) {
-        if (const int error = errno; !force || error != ENOENT) {
-          WarnAt(prog, path, error);
+  const auto remove = cutils::variant::Overloaded{
+      [&](const remmy::MissingOperand& missing) {
+        if (!(force && cli.Options().recursive && cutils::os::GetEUid() != 0) &&
+            (!force || missing.error != ENOENT)) {
+          WarnAt(prog, missing.operand.Path(), missing.error);
           ++failures;
         }
-      }
-      continue;
-    }
+      },
+      [&](const remmy::FileOperand& file) {
+        const char* path = file.operand.CStr();
+        if (LogIfRemoved(cli, stdout, cutils::os::unlink(path), "{}", path) !=
+            0) {
+          if (const int error = errno; !force || error != ENOENT) {
+            WarnAt(prog, path, error);
+            ++failures;
+          }
+        }
+      },
+      [&](const remmy::DirectoryOperand& dir) {
+        const char* path = dir.operand.CStr();
+        if (!cli.Options().recursive) {
+          if (cli.Options().dir) {
+            if (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}",
+                             path) != 0 &&
+                (!force || errno != ENOENT)) {
+              WarnAt(prog, path, errno);
+              ++failures;
+            }
+            return;
+          }
 
-    if (!cli.Options().recursive) {
-      if (cli.Options().dir) {
-        if (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}", path) !=
-                0 &&
-            (!force || errno != ENOENT)) {
-          WarnAt(prog, path, errno);
+          std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
+                                          "{}: is a directory", path);
           ++failures;
+          return;
         }
 
-        continue;
-      }
+        auto dirfd = cutils::os::open(
+            path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (!dirfd) {
+          if (!force || (LogIfRemoved(cli, stdout, cutils::os::rmdir(path),
+                                      "{}", path) != 0 &&
+                         errno != ENOENT)) {
+            WarnAt(prog, path, static_cast<int>(dirfd.error().code));
+            ++failures;
+          }
+          return;
+        }
 
-      std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
-                                      "{}: is a directory", path);
-      ++failures;
-      continue;
-    }
-
-    auto dirfd =
-        cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (!dirfd) {
-      if (!force || (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}",
-                                  path) != 0 &&
-                     errno != ENOENT)) {
-        WarnAt(prog, path, static_cast<int>(dirfd.error().code));
-        ++failures;
-      }
-      continue;
-    }
-
-    roots[operand].device = path_stat.st_dev;
-    roots[operand].relative = FollowsTrailingLink(path) || ThroughSymlink(path);
-    // Seeding precedes Run, so this is still single-threaded.
-    SeedRoot(scheduler, *std::move(dirfd), path, operand);
+        const remmy::Walk& walk =
+            walks.emplace_back(remmy::Walk::Start(dir, *dirfd));
+        // Seeding precedes Run, so this is still single-threaded.
+        SeedRoot(scheduler, *std::move(dirfd), path, walk);
+      },
+  };
+  for (const remmy::Operand operand : cli.Operands()) {
+    std::visit(remove, remmy::Resolve(operand));
   }
 
   (void)scheduler.Wait();

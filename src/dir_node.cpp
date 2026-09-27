@@ -3,6 +3,7 @@
 #include "dir_node.hpp"
 
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <array>
@@ -16,28 +17,25 @@
 #include <utility>
 
 #include "cutils/os/os.hpp"
+#include "walk.hpp"
 
 namespace remmy {
 
 namespace {
 
-/// @brief openat relative to `dir`, or to `start` when `dir` is not open, or
-///        to the cwd when neither is.
-auto OpenAt(const cutils::os::Fd& dir, const cutils::os::Fd* start,
-            const char* name, int flags) noexcept
+/// @brief openat relative to `base`, or open when it is AT_FDCWD.
+auto OpenAt(int base, const char* name, int flags) noexcept
     -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
-  if (dir.IsOpen()) {
-    return cutils::os::openat(dir, name, flags);
+  if (base == AT_FDCWD) {
+    return cutils::os::open(name, flags);
   }
-  return start != nullptr ? cutils::os::openat(*start, name, flags)
-                          : cutils::os::open(name, flags);
+  return cutils::os::Fd::Open([&] { return ::openat(base, name, flags); });
 }
 
 /// @brief Open `path`, even when it is PATH_MAX bytes or longer.
 ///
 /// Returns why it could not be opened on failure.
-auto OpenLong(const cutils::os::Fd* start, std::string_view path,
-              int flags) noexcept
+auto OpenLong(int base, std::string_view path, int flags) noexcept
     -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
   std::array<char, PATH_MAX> piece;
   cutils::os::Fd dir;
@@ -49,12 +47,12 @@ auto OpenLong(const cutils::os::Fd* start, std::string_view path,
     }
     std::copy_n(path.begin(), cut, piece.begin());
     piece[cut] = '\0';
-    auto next =
-        OpenAt(dir, start, piece.data(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    auto next = OpenAt(base, piece.data(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (!next) {
       return std::unexpected(next.error());
     }
     dir = *std::move(next);
+    base = dir.get();
     // The rest is relative to `dir`, even after a doubled slash.
     path.remove_prefix(cut);
     while (!path.empty() && path.front() == '/') {
@@ -63,7 +61,7 @@ auto OpenLong(const cutils::os::Fd* start, std::string_view path,
   }
   std::copy_n(path.begin(), path.size(), piece.begin());
   piece[path.size()] = '\0';
-  return OpenAt(dir, start, piece.data(), flags);
+  return OpenAt(base, piece.data(), flags);
 }
 
 }  // namespace
@@ -111,13 +109,14 @@ auto DirNode::PathInto(std::string& out, std::string_view root) const noexcept
   return out.c_str();
 }
 
-auto DirNode::Open(std::string& scratch, const cutils::os::Fd* root) noexcept
+auto DirNode::Open(std::string& scratch) noexcept
     -> std::expected<void, cutils::os::OpenError> {
   if (fd_.IsOpen()) {
     return {};
   }
 
-  auto opened = OpenLong(root, PathInto(scratch, root != nullptr ? "." : ""),
+  const KernelPath at = walk_.PathOf(*this, scratch);
+  auto opened = OpenLong(at.base, at.path,
                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (!opened) {
     return std::unexpected(opened.error());
@@ -126,13 +125,13 @@ auto DirNode::Open(std::string& scratch, const cutils::os::Fd* root) noexcept
   return {};
 }
 
-auto DirNode::RemoveEmpty(std::string& scratch,
-                          const cutils::os::Fd* root) const noexcept -> int {
-  const char* const c_path = PathInto(scratch, root != nullptr ? "." : "");
+auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
+  const KernelPath at = walk_.PathOf(*this, scratch);
+  const char* const c_path = at.path;
   const std::string_view path = scratch;
   if (path.size() < PATH_MAX) {
-    return root != nullptr ? cutils::os::unlinkat(*root, c_path, AT_REMOVEDIR)
-                           : cutils::os::rmdir(c_path);
+    return at.base == AT_FDCWD ? cutils::os::rmdir(c_path)
+                               : ::unlinkat(at.base, c_path, AT_REMOVEDIR);
   }
 
   // Too long for rmdir: remove it relative to its parent instead.
@@ -141,13 +140,23 @@ auto DirNode::RemoveEmpty(std::string& scratch,
     errno = ENAMETOOLONG;
     return -1;
   }
-  const auto parent = OpenLong(root, std::string_view{c_path, slash},
+  const auto parent = OpenLong(at.base, std::string_view{c_path, slash},
                                O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (!parent) {
     errno = static_cast<int>(parent.error().code);
     return -1;
   }
   return cutils::os::unlinkat(*parent, c_path + slash + 1, AT_REMOVEDIR);
+}
+
+auto DirNode::Lookup(std::string& scratch) const noexcept -> int {
+  const KernelPath at = walk_.PathOf(*this, scratch);
+  struct stat node_stat;
+  const int status =
+      at.base == AT_FDCWD
+          ? cutils::os::lstat(at.path, &node_stat)
+          : ::fstatat(at.base, at.path, &node_stat, AT_SYMLINK_NOFOLLOW);
+  return status == 0 ? 0 : errno;
 }
 
 }  // namespace remmy
