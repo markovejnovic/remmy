@@ -59,6 +59,7 @@
 #include <cutils/io/stderr_writer.hpp>
 #include <cutils/io/stdin_reader.hpp>
 #include <cutils/io/stdout_writer.hpp>
+#include <cutils/io/warn.hpp>
 #include <cutils/io/writer_ref.hpp>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
@@ -100,16 +101,15 @@ static auto ThreadCount() -> std::uint16_t {
 /// @brief Report a failure the same way BSD rm's does.
 auto WarnAt(std::string_view prog, std::string_view path, int error) noexcept
     -> void {
-  std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: {}",
-                                    prog, path, cutils::os::StrError(error));
+  std::ignore =
+      cutils::io::Warn(cutils::io::stderr_writer, prog, error, "{}", path);
 }
 
 /// @brief WarnAt for the entry `name` of the directory at `dir`.
 auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
             int error) noexcept -> void {
-  std::ignore =
-      cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}/{}: {}", prog, dir,
-                          name, cutils::os::StrError(error));
+  std::ignore = cutils::io::Warn(cutils::io::stderr_writer, prog, error,
+                                 "{}/{}", dir, name);
 }
 
 template <class... Args>
@@ -410,8 +410,8 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
   }
 
   if (S_ISDIR(path_stat.st_mode)) {
-    std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                      "{}: {}: is a directory", prog, path);
+    std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
+                                    "{}: is a directory", path);
     return 1;
   }
 
@@ -486,8 +486,8 @@ auto RunRm(const remmy::Cli& cli) -> int {
         continue;
       }
 
-      std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
-                                        "{}: {}: is a directory", prog, path);
+      std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
+                                      "{}: is a directory", path);
       ++failures;
       continue;
     }
