@@ -98,9 +98,15 @@ static auto ThreadCount() -> std::uint16_t {
 
 /// @brief The name rm's diagnostics start with: getprogname(3), which is the
 ///        basename of the executed file (a symlink's own name), not argv[0].
+///
+/// glibc has no getprogname(3); its closest is the basename of argv[0].
 auto ProgramName() noexcept -> std::string_view {
+#if defined(__GLIBC__)
+  const char* name = ::program_invocation_short_name;
+#else
   const char* name = ::getprogname();
-  return name != nullptr ? name : "rm";
+#endif
+  return name != nullptr && *name != '\0' ? name : "rm";
 }
 
 /// @brief strerror(3)'s text, held in a buffer of its own so that workers can
@@ -108,17 +114,28 @@ auto ProgramName() noexcept -> std::string_view {
 ///        gets rm's "Unknown error: N").
 class ErrorText {
  public:
-  explicit ErrorText(int error) noexcept {
-    (void)::strerror_r(error, text_.data(), text_.size());
-  }
+  explicit ErrorText(int error) noexcept
+      : view_(Text(::strerror_r(error, text_.data(), text_.size()))) {}
 
   [[nodiscard]] auto View() const noexcept -> std::string_view {
-    return text_.data();
+    return view_;
   }
 
  private:
+  /// @brief XSI strerror_r returns an int and fills the buffer.
+  [[nodiscard]] auto Text(int /*result*/) const noexcept -> const char* {
+    return text_.data();
+  }
+
+  /// @brief GNU strerror_r (glibc with _GNU_SOURCE) returns the text, which
+  ///        need not be in the buffer.
+  [[nodiscard]] static auto Text(const char* text) noexcept -> const char* {
+    return text;
+  }
+
   static constexpr std::size_t kSize = 128;
   std::array<char, kSize> text_{};
+  std::string_view view_;
 };
 
 /// @brief Reports a failure the way BSD rm's warn(3) does:
