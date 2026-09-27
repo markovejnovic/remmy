@@ -1,18 +1,24 @@
 name: Release
 
 # Pushing a v* tag builds every target, tests each binary and publishes a
-# GitHub release. A manual run builds and tests the same way but publishes
-# nothing; use it to check a commit before tagging it.
+# GitHub release. Pull requests that touch the release build, and manual runs,
+# build and test the same way but publish nothing.
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - CMakeLists.txt
+      - CMakePresets.json
+      - cutils/**
   workflow_dispatch:
 
 # Two pushes of one tag must not publish over each other; never cancel a
-# release halfway through uploading.
+# release halfway through uploading. A newer PR commit supersedes an older one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
