@@ -64,6 +64,7 @@
 #include <cutils/os/limits/fd.hpp>
 #include <cutils/os/os.hpp>
 #include <cutils/task_scheduler/task_scheduler.hpp>
+#include <cutils/variant.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
 #include <optional>
 #include <span>
@@ -73,6 +74,7 @@
 #include <thread>
 #include <tuple>
 #include <utility>
+#include <variant>
 
 #include "cli.hpp"
 #include "dir_node.hpp"
@@ -146,7 +148,7 @@ class FileUnlinkWorker {
         if (!cli_.Options().force ||
             (task->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT)) {
           failures_++;
-          WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+          WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
                  static_cast<int>(err.code));
         }
 
@@ -173,7 +175,7 @@ class FileUnlinkWorker {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
         failures_++;
-        WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+        WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
                static_cast<int>(read.error()));
         break;
       }
@@ -191,7 +193,7 @@ class FileUnlinkWorker {
                                 AT_SYMLINK_NOFOLLOW) != 0) {
           if (errno != ENOENT) {
             failures_++;
-            WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+            WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
                    entry.name(), errno);
           }
           continue;
@@ -203,8 +205,8 @@ class FileUnlinkWorker {
         if (cutils::os::unlinkat(task->fd_, entry.c_str(), 0) != 0 &&
             errno != ENOENT) {
           failures_++;
-          WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
-                 entry.name(), errno);
+          WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), entry.name(),
+                 errno);
         }
         continue;
       }
@@ -223,7 +225,7 @@ class FileUnlinkWorker {
                    0 &&
                errno != ENOENT)) {
             failures_++;
-            WarnAt(cli_.ExecutableName(), task->PathInto(path_buffer_),
+            WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
                    entry.name(), static_cast<int>(opened.error().code));
           }
           continue;
@@ -266,7 +268,7 @@ class FileUnlinkWorker {
 
       if (current->RemoveEmpty(path_buffer_) != 0 && errno != ENOENT) {
         failures_++;
-        WarnAt(cli_.ExecutableName(), path_buffer_, errno);
+        WarnAt(cli_.CommandName(), path_buffer_, errno);
       }
 
       delete current;
@@ -290,25 +292,12 @@ class FileUnlinkWorker {
 using Scheduler =
     cutils::TaskScheduler<FileUnlinkWorker, FileUnlinkWorker::kRanks>;
 
-/// @brief Whether the operand's last component is `.` or `..`.
-constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
-  while (path.size() > 1 && path.back() == '/') {
-    path.remove_suffix(1);
-  }
-
-  const std::size_t slash = path.rfind('/');
-  const std::string_view last =
-      slash == std::string_view::npos ? path : path.substr(slash + 1);
-
-  return last == "." || last == "..";
-}
-
 /// @brief Asks BSD rm's -I question when it would; true to go ahead.
 ///
-/// rm asks once when, among the operands that exist (lstat(2)) and are not
-/// "." or "..", there is a directory under -r or -R, or more than three in
-/// all. Only the first character of each answer line counts; anything but y
-/// or n asks again, and end of input declines.
+/// rm asks once when, among the operands that exist (lstat(2)), there is a
+/// directory under -r or -R, or more than three in all. Only the first
+/// character of each answer line counts; anything but y or n asks again, and
+/// end of input declines.
 auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
     -> bool {
   static constexpr std::size_t kMaxSilentOperands = 3;
@@ -320,8 +309,7 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   std::string_view dir_name;
   for (const char* path : operands) {
     struct stat path_stat;
-    if (IsDotOrDotDotOperand(path) ||
-        cutils::os::lstat(path, &path_stat) != 0) {
+    if (cutils::os::lstat(path, &path_stat) != 0) {
       continue;
     }
     if (S_ISDIR(path_stat.st_mode)) {
@@ -372,6 +360,36 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   }
 }
 
+/// @brief Run as unlink(1).
+///
+/// BSD rm has this mode wherein it special-cases its behavior based on how its
+/// invoked -- if it's called `unlink` via the CLI, it takes this behavior.
+///
+/// It pretty much forwards the call straight to the unlink syscall.
+auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
+  const char* path = cli.Operand();
+  const std::string_view prog = cli.CommandName();
+
+  struct stat path_stat;
+  if (cutils::os::lstat(path, &path_stat) != 0) {
+    WarnAt(prog, path, errno);
+    return 1;
+  }
+
+  if (S_ISDIR(path_stat.st_mode)) {
+    std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
+                                      "{}: {}: is a directory", prog, path);
+    return 1;
+  }
+
+  if (cutils::os::unlink(path) != 0) {
+    WarnAt(prog, path, errno);
+    return 1;
+  }
+
+  return 0;
+}
+
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
@@ -380,39 +398,24 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
   }
 }
 
-}  // namespace
-
-auto main(int argc, char** argv) -> int {
-  const auto cli = remmy::Argv{argc, argv}.TryParseOrAbort();
-  if (!cli) {
-    return cli.error();
-  }
-
-  if (cli->Options().prompt_once &&
-      !ConfirmPromptOnce(cli->Operands(), cli->Options().recursive)) {
+auto RunRm(const remmy::Cli& cli) -> int {
+  if (cli.Options().prompt_once &&
+      !ConfirmPromptOnce(cli.Operands(), cli.Options().recursive)) {
     return 1;
   }
 
-  const bool force = cli->Options().force;
+  const bool force = cli.Options().force;
   const std::uint16_t threads = ThreadCount();
-  const std::string_view prog = cli->ExecutableName();
-  const FileUnlinkWorker prototype(*cli);
+  const std::string_view prog = cli.CommandName();
+  const FileUnlinkWorker prototype(cli);
   Scheduler scheduler(threads, prototype);
 
-  std::size_t failures = 0;
-  for (const char* path : cli->Operands()) {
-    if (IsDotOrDotDotOperand(path)) {
-      std::ignore = cutils::io::PrintLn(
-          cutils::io::stderr_writer,
-          "cannot remove '{}': '.' and '..' may not be removed", path);
-      ++failures;
-      continue;
-    }
-
+  std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
+  for (const char* path : cli.Operands()) {
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
       if (const int error = errno;
-          !(force && cli->Options().recursive && cutils::os::GetEUid() != 0) &&
+          !(force && cli.Options().recursive && cutils::os::GetEUid() != 0) &&
           (!force || error != ENOENT)) {
         WarnAt(prog, path, error);
         ++failures;
@@ -430,7 +433,7 @@ auto main(int argc, char** argv) -> int {
       continue;
     }
 
-    if (!cli->Options().recursive) {
+    if (!cli.Options().recursive) {
       std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
                                         "{}: {}: is a directory", prog, path);
       ++failures;
@@ -458,4 +461,20 @@ auto main(int argc, char** argv) -> int {
   }
 
   return failures == 0 ? 0 : 1;
+}
+
+}  // namespace
+
+auto main(int argc, char** argv) -> int {
+  const auto parsed = remmy::Argv{argc, argv}.TryParseOrAbort();
+  if (!parsed) {
+    return parsed.error();
+  }
+
+  return std::visit(
+      cutils::variant::Overloaded{
+          [](const remmy::UnlinkCli& cli) { return RunUnlink(cli); },
+          [](const remmy::Cli& cli) { return RunRm(cli); },
+      },
+      *parsed);
 }
