@@ -240,7 +240,7 @@ def test_dot_and_dotdot_operands_are_refused(run: Runner, workdir: Path, operand
 def test_unlink_mode_options_never_walk_dot_operands(
     remmy_bin: Path, tmp_path: Path, workdir: Path, args: list[str], via: str
 ) -> None:
-    """Invoked as unlink(1), rm rejects any option with its usage; remmy must at least keep the dot guard there."""
+    """Invoked as unlink(1), rm parses no options: any of these is two operands, so a usage error that removes nothing."""
     fstree.build(workdir, {"keep": "x", "a": {"f": "x", "b": {"g": "x", "sub": {"h": "x"}}}})
     before = fstree.snapshot_dir(workdir)
     if via == "symlink":
@@ -254,7 +254,9 @@ def test_unlink_mode_options_never_walk_dot_operands(
     res = subprocess.run(cmd, executable=executable, cwd=workdir / "a" / "b", capture_output=True, check=False)
 
     with check:
-        assert res.returncode != 0, res
+        assert res.returncode == 64, res
+    with check:
+        assert res.stderr.startswith(b"usage: "), res
     with check:
         assert fstree.snapshot_dir(workdir) == before
 

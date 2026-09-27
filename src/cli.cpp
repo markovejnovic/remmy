@@ -1,5 +1,6 @@
 #include "cli.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <expected>
 #include <optional>
@@ -7,6 +8,7 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <variant>
 
 #include "cutils/io/print.hpp"
 #include "cutils/io/stderr_writer.hpp"
@@ -55,9 +57,6 @@ constexpr auto ApplyOption(Options& options, char letter) noexcept -> bool {
   }
 }
 
-/// @brief The error code to throw in case of a bad arg parsing.
-constexpr int kExitUsage = 64;
-
 constexpr int kExitUnsupported = 1;
 
 /// @brief The usage message to print in case of bad arg parsing.
@@ -65,7 +64,47 @@ constexpr std::string_view kUsageMsg =
     "usage: rm [-f | -i] [-dIPRrvWx] file ...\n"
     "       unlink [--] file";
 
+/// @brief Whether the operand's last component is `.` or `..`.
+constexpr auto IsDotOrDotDotOperand(std::string_view path) noexcept -> bool {
+  while (path.size() > 1 && path.back() == '/') {
+    path.remove_suffix(1);
+  }
+
+  const std::size_t slash = path.rfind('/');
+  const std::string_view last =
+      slash == std::string_view::npos ? path : path.substr(slash + 1);
+
+  return last == "." || last == "..";
+}
+
 }  // namespace
+
+/// @brief Whether rm runs as unlink(1).
+auto Argv::IsUnlinkMode() const noexcept -> bool {
+  const std::string_view argv0 = InvocationPath();
+  const std::size_t slash = argv0.rfind('/');
+
+  return (slash == std::string_view::npos ? argv0 : argv0.substr(slash + 1)) ==
+         "unlink";
+}
+
+/// @brief The one operand of an unlink(1) command line, or nullptr when it is
+///        a usage error.
+///
+/// unlink(1) parses no options: it takes exactly one operand, which a single
+/// leading "--" may precede. So "-f" alone is a file's name, "--" alone is one
+/// too, and "-f file" or "a b" are usage errors.
+auto Argv::UnlinkOperand() const noexcept
+    -> std::expected<const char*, UsageError> {
+  const std::span<char* const> args = ArgsSpan();
+  if (args.size() == 1) {
+    return args.front();
+  }
+  if (args.size() == 2 && std::string_view(args.front()) == "--") {
+    return args.back();
+  }
+  return std::unexpected(UsageError::Unknown());
+}
 
 auto Argv::Parse() const noexcept -> std::expected<Cli, UsageError> {
   Options options;
@@ -89,31 +128,43 @@ auto Argv::Parse() const noexcept -> std::expected<Cli, UsageError> {
     }
   }
 
-  const std::span<char* const> operands = ArgsSpan().subspan(index);
+  const std::span<char*> operands = span_.last(ArgsSpan().size() - index);
   if (operands.empty() && !options.force) {
     return std::unexpected(UsageError::Unknown());
   }
   return Cli(options, operands, *this);
 }
 
-auto Argv::ExecutableName() const noexcept -> std::string_view {
+auto Argv::CommandName() const noexcept -> std::string_view {
   if (const std::string_view name = cutils::os::GetProgName(); !name.empty()) {
     return name;
   }
 
-  const std::string_view argv0 = ProgramName();
+  const std::string_view argv0 = InvocationPath();
   const std::string_view base = argv0.substr(argv0.rfind('/') + 1);
 
-  return base.empty() ? detail::kDefaultProgramName : base;
+  return base.empty() ? "rm" : base;
 }
 
-auto Argv::TryParseOrAbort() && noexcept -> std::expected<Cli, int> {
+auto Argv::TryParseOrAbort() && noexcept
+    -> std::expected<std::variant<Cli, UnlinkCli>, int> {
+  if (IsUnlinkMode()) {
+    const auto operand = UnlinkOperand();
+    if (!operand) {
+      ReportUsage(operand.error());
+      return std::unexpected(kExitUsage);
+    }
+    return UnlinkCli(*operand, *this);
+  }
+
   auto parsed = Parse();
 
   if (!parsed) {
     ReportUsage(parsed.error());
     return std::unexpected(kExitUsage);
   }
+
+  parsed->DropUnremovableOperands();
 
   // Okay, well we parsed something. Let's abort on flags we don't actually
   // support.
@@ -130,7 +181,7 @@ void Argv::ReportUsage(UsageError err) const noexcept {
   if (err.IllegalOption()) {
     std::ignore = cutils::io::PrintLn(
         cutils::io::stderr_writer, "{}: illegal option -- {}\n{}",
-        ProgramName(), *err.IllegalOption(), kUsageMsg);
+        InvocationPath(), *err.IllegalOption(), kUsageMsg);
   } else {
     std::ignore =
         cutils::io::PrintLn(cutils::io::stderr_writer, "{}", kUsageMsg);
@@ -142,7 +193,7 @@ auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
     std::ignore =
         cutils::io::PrintLn(cutils::io::stderr_writer,
                             "{}: -{}: not supported yet; nothing was removed",
-                            ProgramName(), option);
+                            InvocationPath(), option);
     return std::unexpected(kExitUnsupported);
   };
 
@@ -157,6 +208,35 @@ auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
   }
 
   return cli;
+}
+
+/// @brief BSD rm's checkdot(), then its checkslash().
+///
+/// Before anything is removed, rm drops every operand whose last component is
+/// "." or "..", then every operand that is exactly "/" ("//" is an ordinary
+/// directory), and says so once per check for the whole command line, dot
+/// first, whatever the options (-f included). The rest keep their order.
+auto Cli::DropUnremovableOperands() noexcept -> void {
+  const auto is_slash = [](std::string_view path) { return path == "/"; };
+  const bool dot = std::ranges::any_of(operands_, IsDotOrDotDotOperand);
+  const bool slash = std::ranges::any_of(operands_, is_slash);
+  const auto dropped =
+      std::ranges::remove_if(operands_, [&](std::string_view path) {
+        return IsDotOrDotDotOperand(path) || is_slash(path);
+      });
+  operands_ = operands_.first(operands_.size() - dropped.size());
+
+  if (dot) {
+    std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer,
+                                      "{}: \".\" and \"..\" may not be removed",
+                                      CommandName());
+  }
+  if (slash) {
+    std::ignore =
+        cutils::io::PrintLn(cutils::io::stderr_writer,
+                            "{}: \"/\" may not be removed", CommandName());
+  }
+  exits_non_zero_ |= dot || slash;
 }
 
 }  // namespace remmy
