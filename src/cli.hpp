@@ -100,8 +100,7 @@ struct Argv {
   std::span<char* const> span_;
 };
 
-/// @brief A parsed command line: the options, what follows them, and the
-///        command line they were parsed from.
+/// @brief A parsed command line: the options, and positional arguments.
 struct Cli {
   constexpr Cli(remmy::Options options, std::span<char* const> operands,
                 Argv argv) noexcept
