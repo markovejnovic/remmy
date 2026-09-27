@@ -13,7 +13,7 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.timeout(0)]
 def test_matrix(bench: BenchSession, matrix: tuple[str, schema.Cache], request: pytest.FixtureRequest) -> None:
     fixture_id, cache = matrix
     if cache is schema.Cache.COLD:
-        request.getfixturevalue("root")
+        request.getfixturevalue("cache_purge")
     reporter = request.config.pluginmanager.getplugin("terminalreporter")
 
     def progress(message: str) -> None:

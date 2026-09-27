@@ -1,0 +1,3 @@
+self-hosted-runner:
+  # remmy-bench: the bare-metal benchmark machine (ci/bench-host).
+  labels: [remmy-bench, xcode-27]

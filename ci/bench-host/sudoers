@@ -1,0 +1,2 @@
+# The benchmark runner may run exactly these, and nothing else, as root.
+gh-runner ALL=(root) NOPASSWD: /usr/local/sbin/bench-ctl drop-caches, /usr/local/sbin/bench-ctl fstrim

@@ -1,6 +1,7 @@
 """Estimators and the decision rule on synthetic data with known answers. These run in the normal suite: a
 statistics bug would silently mislabel every benchmark."""
 
+import json
 import math
 import random
 from pathlib import Path
@@ -109,9 +110,13 @@ def test_synthetic_run_recovers_planted_effects(demo_plan):
     assert verdicts["xargs@1"] is Verdict.DISTINCT
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
 @pytest.mark.parametrize("name", registry.PLANS)
-def test_registered_plans_are_valid(name):
-    registry.plan(name, Path("/opt/remmy"))
+def test_registered_plans_are_valid(name, platform):
+    plan = registry.plan(name, Path("/opt/remmy"), platform)
+    # Every platform times the same fixtures against a tool named rm, so ratios mean the same thing.
+    assert plan.fixtures == registry.plan(name, Path("/opt/remmy"), "darwin").fixtures
+    assert plan.reference == "rm"
 
 
 def test_every_round_runs_every_cell_once(demo_plan):
@@ -147,3 +152,28 @@ def test_interval_rejects_reversed_bounds():
 
 def test_cell_key_labels():
     assert str(CellKey("F0", "remmy", 4, Cache.WARM)) == "F0/warm/remmy@4"
+
+
+def test_bmf_carries_the_summary_bencher_tracks(demo_plan, tmp_path):
+    import bmf
+    from session import BenchSession
+
+    rng = np.random.default_rng(3)
+    cells = demo_plan.cells(demo_plan.fixtures[0], Cache.WARM)
+    samples = [schema.Sample(cell=c, seconds=float(rng.lognormal(0, 0.05))) for c in cells for _ in range(6)]
+    session = BenchSession(plan=demo_plan, env=None, out=tmp_path, rng=random.Random(1), samples=samples)
+    summary = session.summary()
+    doc = bmf.convert(json.loads(session.write_json(summary).read_text()))
+
+    assert set(doc) == {f"demo/F0/warm/{c.label}" for c in cells}
+    remmy = summary.pair(CellKey("F0", "remmy", 4, Cache.WARM))
+    ratio = doc["demo/F0/warm/remmy@4"]["time-ratio"]
+    assert ratio == {"value": remmy.time_ratio, "lower_value": remmy.time_ratio_ci95.lo,
+                     "upper_value": remmy.time_ratio_ci95.hi}  # fmt: skip
+    # Only the subject is judged on a ratio; the reference and competitors are controls.
+    assert all("time-ratio" not in m for name, m in doc.items() if "/remmy@" not in name)
+    latency = doc["demo/F0/warm/rm@1"]["latency"]
+    assert latency["lower_value"] <= latency["value"] <= latency["upper_value"]
+    assert 0.5e9 < latency["value"] < 2e9  # ns
+    rate = doc["demo/F0/warm/rm@1"]["throughput"]
+    assert rate["lower_value"] <= rate["value"] <= rate["upper_value"]

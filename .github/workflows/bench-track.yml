@@ -1,0 +1,98 @@
+name: Bench track
+
+# Uploads a finished Bench run's results to Bencher (bencher.dev), which keeps
+# the history, compares a PR with main and comments on the PR. It runs from the
+# default branch with the Bencher key, on GitHub's runners: neither the key nor
+# a write token ever reaches the bench machine, which runs PR code.
+#
+# Only remmy's time-ratio (its median over GNU rm's, in the same run) is
+# judged: a ratio cancels drift that slows every tool on the machine alike.
+# Latency and throughput of every tool are tracked as context.
+on:
+  workflow_run:
+    workflows: [Bench]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  track:
+    name: Track
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      EVENT: ${{ github.event.workflow_run.event }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+    steps:
+      # A run whose plan skipped the benchmark has nothing to upload.
+      - name: Download results
+        id: results
+        run: |
+          if gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" -q '.artifacts[].name' | grep -qx bench-results; then
+            gh run download "$RUN_ID" -R "$REPO" -n bench-results -D results
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Everything here comes from GitHub, not from the artifact: a fork's PR
+      # wrote that, so it only decides the suite of main and dispatched runs.
+      - name: Resolve branches
+        if: steps.results.outputs.found
+        run: |
+          if [[ "$EVENT" == pull_request ]]; then
+            pr="$(gh api "repos/$REPO/pulls?state=all&head=$HEAD_OWNER:$HEAD_BRANCH" -q '.[0]')"
+            [[ -n "$pr" ]] || { echo "::error::no PR for $HEAD_OWNER:$HEAD_BRANCH"; exit 1; }
+            {
+              echo "PR_NUMBER=$(jq -r .number <<<"$pr")"
+              echo "BASE_BRANCH=$(jq -r .base.ref <<<"$pr")"
+              echo "BASE_SHA=$(jq -r .base.sha <<<"$pr")"
+              # Not the head branch's name: a fork's `main` must never land on ours.
+              echo "BRANCH=pr-$(jq -r .number <<<"$pr")"
+            } >> "$GITHUB_ENV"
+          else
+            suite="$(jq -r .suite results/meta.json)"
+            [[ "$suite" == demo || "$suite" == full ]] || { echo "::error::bad suite '$suite'"; exit 1; }
+            echo "BRANCH=$HEAD_BRANCH" >> "$GITHUB_ENV"
+          fi
+
+      - uses: bencherdev/bencher@8d75325c3bc59403a2186a056b472c4f49d42838 # v0.6.12
+        if: steps.results.outputs.found
+
+      - name: Upload to Bencher
+        if: steps.results.outputs.found
+        env:
+          BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
+          BENCHER_PROJECT: ${{ vars.BENCHER_PROJECT || 'remmy' }}
+          BENCHER_TESTBED: ${{ vars.BENCHER_TESTBED || 'vultr-bare-metal' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          args=(
+            --project "$BENCHER_PROJECT" --key "$BENCHER_API_KEY" --testbed "$BENCHER_TESTBED"
+            --branch "$BRANCH" --hash "$HEAD_SHA"
+            --adapter json --file results/bmf.json
+            --github-actions "$GITHUB_TOKEN" --error-on-alert
+          )
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            # Judged against main's history up to the PR's base, with main's thresholds.
+            args+=(
+              --start-point "$BASE_BRANCH" --start-point-hash "$BASE_SHA"
+              --start-point-clone-thresholds --start-point-reset --ci-number "$PR_NUMBER"
+            )
+          elif [[ "$BRANCH" == main ]]; then
+            # main owns the thresholds: a ratio more than 99% likely above main's recent runs alerts.
+            args+=(
+              --threshold-measure time-ratio --threshold-test t_test
+              --threshold-max-sample-size 30 --threshold-upper-boundary 0.99 --thresholds-reset
+            )
+          else
+            args+=(--start-point main --start-point-clone-thresholds --start-point-reset)
+          fi
+          bencher run "${args[@]}"

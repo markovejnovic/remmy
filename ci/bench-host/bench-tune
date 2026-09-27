@@ -1,0 +1,21 @@
+#!/bin/sh
+# Boot-time tuning for stable timings, run by bench-tune.service. Every knob is
+# best-effort: a sysfs file a CPU or kernel lacks is skipped, not fatal.
+# /etc/default/bench-tune may set BENCH_SMT=off to also disable SMT siblings.
+set -u
+BENCH_SMT=on
+# shellcheck source=/dev/null
+[ -r /etc/default/bench-tune ] && . /etc/default/bench-tune
+
+write() { [ -w "$2" ] && echo "$1" >"$2"; }
+
+# Fixed, maximum frequency policy: no ramp-up latency inside a timed run.
+for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do write performance "$g"; done
+for p in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do write performance "$p"; done
+# Turbo and boost clocks depend on temperature and on how many cores are awake.
+write 1 /sys/devices/system/cpu/intel_pstate/no_turbo
+write 0 /sys/devices/system/cpu/cpufreq/boost
+[ "$BENCH_SMT" = off ] && write off /sys/devices/system/cpu/smt/control
+# A timed run must never page.
+swapoff -a
+exit 0
