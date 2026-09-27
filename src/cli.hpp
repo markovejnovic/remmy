@@ -145,8 +145,8 @@ struct Cli {
     return argv_.CommandName();
   }
 
-  [[nodiscard]] constexpr auto ExitsNonZero() const noexcept -> bool {
-    return exits_non_zero_;
+  [[nodiscard]] constexpr auto HasDroppedOperands() const noexcept -> bool {
+    return has_dropped_operands_;
   }
 
   /// @brief Check whether any arguments end with `.`, `..` or `/` and print an
@@ -161,7 +161,7 @@ struct Cli {
 
   /// @brief The command line this was parsed from.
   Argv argv_;
-  bool exits_non_zero_ = false;
+  bool has_dropped_operands_ = false;
 };
 
 /// @brief The command line arguments when remmy is running as `unlink`.

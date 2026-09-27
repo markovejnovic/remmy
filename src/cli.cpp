@@ -18,6 +18,9 @@ namespace remmy {
 
 namespace {
 
+/// @brief The error code to throw in case of a bad arg parsing.
+constexpr int kExitUsage = 64;
+
 /// @brief Applies one option letter, false when it is not one of rm's.
 constexpr auto ApplyOption(Options& options, char letter) noexcept -> bool {
   switch (letter) {
@@ -211,12 +214,6 @@ auto Argv::CheckUnsupported(Cli cli) const noexcept -> std::expected<Cli, int> {
   return cli;
 }
 
-/// @brief BSD rm's checkdot(), then its checkslash().
-///
-/// Before anything is removed, rm drops every operand whose last component is
-/// "." or "..", then every operand that is exactly "/" ("//" is an ordinary
-/// directory), and says so once per check for the whole command line, dot
-/// first, whatever the options (-f included). The rest keep their order.
 auto Cli::DropUnremovableOperands() noexcept -> void {
   const auto is_slash = [](std::string_view path) { return path == "/"; };
   const bool dot = std::ranges::any_of(operands_, IsDotOrDotDotOperand);
@@ -237,7 +234,7 @@ auto Cli::DropUnremovableOperands() noexcept -> void {
         cutils::io::PrintLn(cutils::io::stderr_writer,
                             "{}: \"/\" may not be removed", CommandName());
   }
-  exits_non_zero_ |= dot || slash;
+  has_dropped_operands_ |= dot || slash;
 }
 
 }  // namespace remmy

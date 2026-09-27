@@ -410,7 +410,7 @@ auto RunRm(const remmy::Cli& cli) -> int {
   const FileUnlinkWorker prototype(cli);
   Scheduler scheduler(threads, prototype);
 
-  std::size_t failures = cli.ExitsNonZero() ? 1 : 0;
+  std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
   for (const char* path : cli.Operands()) {
     struct stat path_stat;
     if (cutils::os::lstat(path, &path_stat) != 0) {
