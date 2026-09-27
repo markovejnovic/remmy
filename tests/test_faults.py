@@ -1,47 +1,45 @@
 """Syscall failures that permissions cannot produce.
 
-The contract under a failing syscall: remmy removes everything the failure
-does not block, names the failing path on stderr, exits 1, and terminates.
-Transient descriptor exhaustion is the exception: it must be retried.
+Under a failing syscall remmy removes everything the failure does not block, names the failing path, exits 1, and
+terminates. Transient descriptor exhaustion is the exception: it must be retried.
 """
-
-from __future__ import annotations
 
 import errno
 import os
+from functools import partial
 from pathlib import Path
 
 import fstree
 import pytest
 import strategies
-from faults import Fault, Injection, run_with_faults
+from faults import Injection, run_with_faults
 from fstree import Special, Symlink
 from hypothesis import assume, event, given, target
 from hypothesis import strategies as st
 from pytest_check import check
 
-
-def _tree(root: Path) -> Path:
-    return fstree.build(
-        root / "t",
-        {
-            "a": {"victim": "v", "b": {"g": ""}, "sib": ""},
-            "c": {"h": "", "l": Symlink(".."), "p": Special.FIFO},
-            "x": "",
-        },
-    )
+EIO, EMFILE = errno.EIO, errno.EMFILE
+TREE = {"a": {"victim": "v", "b": {"g": ""}, "sib": ""}, "c": {"h": "", "l": Symlink(".."), "p": Special.FIFO}, "x": ""}
+_C_ESCAPES = {"\a": "\\a", "\b": "\\b", "\v": "\\v", "\f": "\\f", "\r": "\\r"}
 
 
-def _ancestors(rel: str) -> set[str]:
-    parts = rel.split("/")
-    return {"/".join(parts[:i]) for i in range(1, len(parts))}
+@pytest.fixture
+def frun(remmy_bin: Path, faultlib: Path, workdir: Path):
+    return partial(run_with_faults, remmy_bin, faultlib, cwd=workdir)
+
+
+@pytest.fixture
+def tree(workdir: Path) -> None:
+    fstree.build(workdir / "t", TREE)
+
+
+@pytest.fixture(scope="module")
+def base(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("faults")
 
 
 def _rel(p: Path, root: Path) -> str:
     return os.path.relpath(p, os.path.realpath(root))
-
-
-_C_ESCAPES = {"\a": "\\a", "\b": "\\b", "\v": "\\v", "\f": "\\f", "\r": "\\r"}
 
 
 def _shown(rel: str) -> str:
@@ -49,333 +47,154 @@ def _shown(rel: str) -> str:
     return "".join(c if c in "\t\n" or ord(c) >= 0x20 else _C_ESCAPES.get(c, f"\\{ord(c):03o}") for c in rel)
 
 
-# --- Hard failures are reported, contained, and final ------------------------
+def _fails_with(res, err: int, *paths: str) -> None:
+    check.equal(res.returncode, 1, res)
+    check.is_true(all(p in res.stderr for p in paths) and os.strerror(err) in res.stderr, res)
 
 
-def test_failed_unlink_is_reported_by_name(remmy_bin: Path, faultlib: Path, workdir: Path, threads: int) -> None:
-    _tree(workdir)
+# Hard failures are reported, contained, and final.
 
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        threads=threads,
-        faults=[Fault("unlinkat", errno.EIO, "name=victim")],
-    )
 
+def test_failed_unlink_is_reported_by_name(frun, tree, workdir: Path, threads: int) -> None:
+    res, hit = frun("-r", "t", threads=threads, faults=[("unlinkat", EIO, "name=victim")])
     assert [i.fn for i in hit] == ["unlinkat"]
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert "t/a/victim" in res.stderr, res
-    with check:
-        assert os.strerror(errno.EIO) in res.stderr, res
-    with check:
-        assert fstree.listing(workdir) == {"t", "t/a", "t/a/victim"}
+    _fails_with(res, EIO, "t/a/victim")
+    check.equal(fstree.listing(workdir), {"t", "t/a", "t/a/victim"})
 
 
-def test_failed_rmdir_is_reported_by_name(remmy_bin: Path, faultlib: Path, workdir: Path, threads: int) -> None:
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        threads=threads,
-        faults=[Fault("rmdir", errno.EBUSY, "name=b")],
-    )
-
+def test_failed_rmdir_is_reported_by_name(frun, tree, workdir: Path, threads: int) -> None:
+    res, hit = frun("-r", "t", threads=threads, faults=[("rmdir", errno.EBUSY, "name=b")])
     assert hit, "rmdir of t/a/b was never attempted"
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert "t/a/b" in res.stderr and os.strerror(errno.EBUSY) in res.stderr, res
-    with check:
-        assert fstree.listing(workdir) == {"t", "t/a", "t/a/b"}
+    _fails_with(res, errno.EBUSY, "t/a/b")
+    check.equal(fstree.listing(workdir), {"t", "t/a", "t/a/b"})
 
 
-@pytest.mark.parametrize("err", [errno.EIO, errno.EACCES, errno.ENOENT, errno.ELOOP])
-def test_failed_subdirectory_open_skips_only_that_subtree(
-    remmy_bin: Path, faultlib: Path, workdir: Path, err: int
-) -> None:
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        faults=[Fault("openat", err, "name=a")],
-    )
-
+@pytest.mark.parametrize("err", [EIO, errno.EACCES, errno.ENOENT, errno.ELOOP])
+def test_failed_subdirectory_open_skips_only_that_subtree(frun, tree, workdir: Path, err: int) -> None:
+    res, hit = frun("-r", "t", faults=[("openat", err, "name=a")])
     assert hit
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert "t/a" in res.stderr and os.strerror(err) in res.stderr, res
-    with check:
-        assert fstree.listing(workdir) == {"t", "t/a", "t/a/victim", "t/a/b", "t/a/b/g", "t/a/sib"}
+    _fails_with(res, err, "t/a")
+    check.equal(fstree.listing(workdir), {"t", "t/a", "t/a/victim", "t/a/b", "t/a/b/g", "t/a/sib"})
 
 
-def test_failed_operand_open(remmy_bin: Path, faultlib: Path, workdir: Path) -> None:
-    _tree(workdir)
+def test_failed_operand_open(frun, tree, workdir: Path) -> None:
     fstree.build(workdir, {"other": {"f": ""}})
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t", "other"],
-        cwd=workdir,
-        faults=[Fault("open", errno.EIO, "name=t")],
-    )
-
+    res, hit = frun("-r", "t", "other", faults=[("open", EIO, "name=t")])
     assert hit
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert f": t: {os.strerror(errno.EIO)}\n" in res.stderr, res
-    with check:
-        assert not fstree.exists(workdir / "other")
-    with check:
-        assert fstree.exists(workdir / "t/a/victim")
+    _fails_with(res, EIO, f": t: {os.strerror(EIO)}\n")
+    check.is_false(fstree.exists(workdir / "other"))
+    check.is_true(fstree.exists(workdir / "t/a/victim"))
 
 
-def test_failed_operand_lstat(remmy_bin: Path, faultlib: Path, workdir: Path) -> None:
+def test_failed_operand_lstat(frun, workdir: Path) -> None:
     fstree.build(workdir, {"f": "", "g": ""})
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["f", "g"],
-        cwd=workdir,
-        faults=[Fault("lstat", errno.EIO, "name=f")],
-    )
-
+    res, hit = frun("f", "g", faults=[("lstat", EIO, "name=f")])
     assert hit
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert ": f: " in res.stderr, res
-    with check:
-        assert fstree.listing(workdir) == {"f"}
+    _fails_with(res, EIO, ": f: ")
+    check.equal(fstree.listing(workdir), {"f"})
 
 
-def test_failed_top_level_unlink(remmy_bin: Path, faultlib: Path, workdir: Path) -> None:
+def test_failed_top_level_unlink(frun, workdir: Path) -> None:
     fstree.build(workdir, {"f": "", "g": ""})
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["f", "g"],
-        cwd=workdir,
-        faults=[Fault("unlink", errno.EPERM, "name=f")],
-    )
-
+    res, hit = frun("f", "g", faults=[("unlink", errno.EPERM, "name=f")])
     assert hit
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert f": f: {os.strerror(errno.EPERM)}\n" in res.stderr, res
-    with check:
-        assert fstree.listing(workdir) == {"f"}
+    _fails_with(res, errno.EPERM, f": f: {os.strerror(errno.EPERM)}\n")
+    check.equal(fstree.listing(workdir), {"f"})
 
 
 @pytest.mark.parametrize("selector", ["nth=1", "nth=2", "all"])
-def test_failed_directory_read_is_reported(remmy_bin: Path, faultlib: Path, workdir: Path, selector: str) -> None:
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        faults=[Fault("getdirentries", errno.EIO, selector)],
-    )
-
+def test_failed_directory_read_is_reported(frun, tree, workdir: Path, selector: str) -> None:
+    res, hit = frun("-r", "t", faults=[("getdirentries", EIO, selector)])
     assert hit
-    with check:
-        assert res.returncode == 1, res
-    for i in hit:
-        with check:
-            assert _rel(i.path, workdir) in res.stderr, res
-    with check:
-        assert os.strerror(errno.EIO) in res.stderr, res
+    _fails_with(res, EIO, *(_rel(i.path, workdir) for i in hit))
 
 
-# --- Transient descriptor exhaustion must be retried -------------------------
+# Transient descriptor exhaustion must be retried.
 
 
 @pytest.mark.stress
-@pytest.mark.parametrize("err", [errno.EMFILE, errno.ENFILE])
+@pytest.mark.parametrize("err", [EMFILE, errno.ENFILE])
 @pytest.mark.parametrize("selector", ["nth=1", "nth=3", "name=b"])
-def test_transient_fd_exhaustion_is_retried(
-    remmy_bin: Path, faultlib: Path, workdir: Path, threads: int, err: int, selector: str
-) -> None:
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        threads=threads,
-        faults=[Fault("openat", err, selector)],
-    )
-
+def test_transient_fd_exhaustion_is_retried(frun, tree, workdir: Path, threads: int, err: int, selector: str) -> None:
+    res, hit = frun("-r", "t", threads=threads, faults=[("openat", err, selector)])
     assert hit
-    # Even an openat that always fails this way is recoverable: remmy parks the
-    # directory and later opens it by path instead.
-    with check:
-        assert (res.returncode, res.stderr) == (0, ""), res
-    with check:
-        assert fstree.listing(workdir) == set()
+    # Even an openat that always fails this way is recoverable: remmy parks the directory and later opens it by path.
+    check.equal((res.returncode, res.stderr), (0, ""), res)
+    check.equal(fstree.listing(workdir), set())
 
 
 @pytest.mark.stress
-def test_permanent_openat_exhaustion_falls_back_to_paths(
-    remmy_bin: Path, faultlib: Path, workdir: Path, threads: int
-) -> None:
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        threads=threads,
-        faults=[Fault("openat", errno.EMFILE, "all")],
-    )
-
+def test_permanent_openat_exhaustion_falls_back_to_paths(frun, tree, workdir: Path, threads: int) -> None:
+    res, hit = frun("-r", "t", threads=threads, faults=[("openat", EMFILE, "all")])
     assert hit
-    with check:
-        assert (res.returncode, res.stderr) == (0, ""), res
-    with check:
-        assert fstree.listing(workdir) == set()
+    check.equal((res.returncode, res.stderr), (0, ""), res)
+    check.equal(fstree.listing(workdir), set())
 
 
 @pytest.mark.stress
 @pytest.mark.parametrize("fns", [("open",), ("open", "openat")], ids="+".join)
-def test_permanent_exhaustion_terminates_with_an_error(
-    remmy_bin: Path, faultlib: Path, workdir: Path, threads: int, fns: tuple[str, ...]
-) -> None:
+def test_permanent_exhaustion_terminates_with_an_error(frun, tree, threads: int, fns: tuple[str, ...]) -> None:
     """With no way to get a descriptor, remmy must give up, not spin."""
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        threads=threads,
-        faults=[Fault(fn, errno.EMFILE, "all") for fn in fns],
-    )
-
+    res, hit = frun("-r", "t", threads=threads, faults=[(fn, EMFILE, "all") for fn in fns])
     assert hit
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert os.strerror(errno.EMFILE) in res.stderr, res
+    _fails_with(res, EMFILE)
 
 
-# --- Filesystems that do not report entry types ------------------------------
+# Filesystems that do not report entry types.
 
 
-def test_unknown_entry_types_fall_back_to_stat(remmy_bin: Path, faultlib: Path, workdir: Path, threads: int) -> None:
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        threads=threads,
-        dt_unknown=True,
-    )
-
+def test_unknown_entry_types_fall_back_to_stat(frun, tree, workdir: Path, threads: int) -> None:
+    res, hit = frun("-r", "t", threads=threads, dt_unknown=True)
     assert hit == []
-    with check:
-        assert (res.returncode, res.stderr) == (0, ""), res
-    with check:
-        assert fstree.listing(workdir) == set()
+    check.equal((res.returncode, res.stderr), (0, ""), res)
+    check.equal(fstree.listing(workdir), set())
 
 
-def test_failed_fallback_stat_is_reported(remmy_bin: Path, faultlib: Path, workdir: Path) -> None:
-    _tree(workdir)
-
-    res, hit = run_with_faults(
-        remmy_bin,
-        faultlib,
-        ["-r", "t"],
-        cwd=workdir,
-        dt_unknown=True,
-        faults=[Fault("fstatat", errno.EIO, "name=a")],
-    )
-
+def test_failed_fallback_stat_is_reported(frun, tree, workdir: Path) -> None:
+    res, hit = frun("-r", "t", dt_unknown=True, faults=[("fstatat", EIO, "name=a")])
     assert hit
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert "t/a" in res.stderr and os.strerror(errno.EIO) in res.stderr, res
+    _fails_with(res, EIO, "t/a")
     # Whatever remmy does with an entry it cannot classify, the rest goes.
-    with check:
-        assert not fstree.exists(workdir / "t/c")
-    with check:
-        assert not fstree.exists(workdir / "t/x")
-
-
-# --- Property: any single hard failure anywhere ------------------------------
-
-HARD_ERRNOS = st.sampled_from([errno.EIO, errno.EACCES, errno.EPERM, errno.EBUSY, errno.EROFS])
-FAULT_FNS = st.sampled_from(["openat", "unlinkat", "rmdir", "getdirentries"])
+    check.is_false(fstree.exists(workdir / "t/c"))
+    check.is_false(fstree.exists(workdir / "t/x"))
 
 
 def _allowed_survivors(inj: Injection, root: Path) -> set[str]:
-    """What a single failure at ``inj`` may legitimately leave behind."""
+    """What a single failure at ``inj`` may legitimately leave behind: it, its ancestors, and, if the directory could
+    not be (fully) read, its contents."""
     rel = _rel(inj.path, root)
-    blocked = {rel} | _ancestors(rel)
+    parts = rel.split("/")
+    blocked = {"/".join(parts[:i]) for i in range(1, len(parts) + 1)}
     if inj.fn in ("openat", "getdirentries"):
-        # The directory could not be (fully) read: its contents may remain.
-        subtree = {p for p in fstree.listing(root) if p.startswith(rel + "/")}
-        return blocked | subtree
+        blocked |= {p for p in fstree.listing(root) if p.startswith(rel + "/")}
     return blocked
 
 
 @given(
-    tree=strategies.trees.filter(bool),
-    fn=FAULT_FNS,
-    err=HARD_ERRNOS,
+    spec=strategies.trees.filter(bool),
+    fn=st.sampled_from(["openat", "unlinkat", "rmdir", "getdirentries"]),
+    err=st.sampled_from([EIO, errno.EACCES, errno.EPERM, errno.EBUSY, errno.EROFS]),
     nth=st.integers(1, 40),
     threads=st.integers(1, 8),
     dt_unknown=st.booleans(),
 )
 def test_any_single_failure_is_contained_and_reported(
-    remmy_bin: Path,
-    faultlib: Path,
-    base: Path,
-    tree: fstree.Spec,
-    fn: str,
-    err: int,
-    nth: int,
-    threads: int,
-    dt_unknown: bool,
+    remmy_bin: Path, faultlib: Path, base: Path, spec, fn: str, err: int, nth: int, threads: int, dt_unknown: bool
 ) -> None:
-    strategies.describe_tree(tree)
+    strategies.describe_tree(spec)
     event(f"dt_unknown: {dt_unknown}")
     with fstree.scratch(base) as d:
-        fstree.build(d / "t", tree)
-
+        fstree.build(d / "t", spec)
         res, hit = run_with_faults(
             remmy_bin,
             faultlib,
-            ["-r", "t"],
+            "-r",
+            "t",
             cwd=d,
             threads=threads,
             dt_unknown=dt_unknown,
-            faults=[Fault(fn, err, f"nth={nth}")],
+            faults=[(fn, err, f"nth={nth}")],
         )
-
         event(f"fault fired: {bool(hit)}")
         if not hit:
             assert (res.returncode, res.stderr) == (0, ""), res
@@ -387,15 +206,8 @@ def test_any_single_failure_is_contained_and_reported(
         assume(rel == "t" or rel.startswith("t/"))  # ignore libc-internal calls
         event(f"failed: {fn}")
         target(float(rel.count("/")), label="depth of injected failure")
-
         survivors = fstree.listing(d)
         assert res.returncode == 1, res
         assert _shown(rel) in res.stderr, f"failing path {rel!r} not named\n{res}"
-        assert survivors <= _allowed_survivors(inj, d), (
-            f"collateral survivors: {sorted(survivors - _allowed_survivors(inj, d))}\n{res}"
-        )
-
-
-@pytest.fixture(scope="module")
-def base(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp("faults")
+        extra = survivors - _allowed_survivors(inj, d)
+        assert not extra, f"collateral survivors: {sorted(extra)}\n{res}"

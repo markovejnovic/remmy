@@ -1,7 +1,5 @@
 """State shared by the benchmark tests of one pytest session."""
 
-from __future__ import annotations
-
 import dataclasses
 import json
 import math
@@ -29,20 +27,19 @@ class BenchSession:
         return stats.summarize(self.run())
 
     def write_json(self, summary: schema.Summary) -> Path:
-        """Write the plan, every sample (in the order it was timed) and the summary to ``run.json``."""
+        """Write the plan, every sample (in timing order) and the summary to run.json."""
         self.out.mkdir(parents=True, exist_ok=True)
-        path = self.out / "run.json"
-        document = {
+        doc = {
             "plan": dataclasses.asdict(self.plan),
             "samples": [{**dataclasses.asdict(s.cell), "seconds": s.seconds} for s in self.samples],
             "summary": dataclasses.asdict(summary),
         }
-        path.write_text(json.dumps(_strict(document), indent=1) + "\n")
+        (path := self.out / "run.json").write_text(json.dumps(_strict(doc), indent=1) + "\n")
         return path
 
 
-def _strict(value: object) -> object:
-    """``value`` with NaN (an undefined interval bound) as null, which strict JSON allows."""
+def _strict(value):
+    """NaN (an undefined interval bound) -> null, which strict JSON allows."""
     if isinstance(value, float) and math.isnan(value):
         return None
     if isinstance(value, dict):

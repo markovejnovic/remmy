@@ -1,11 +1,6 @@
-"""The comparison benchmark (opt-in: ``pytest tests/bench --bench=demo``).
-
-Each ``test_matrix`` times one (fixture, cache) matrix: every tool at every
-thread count, on a fresh tree per run, in shuffled rounds. Charts are written
-when the session ends.
+"""The comparison benchmark (opt-in: pytest tests/bench --bench=demo). Each test_matrix times one (fixture, cache)
+matrix: every tool at every thread count, a fresh tree per run, in shuffled rounds. Charts are written at session end.
 """
-
-from __future__ import annotations
 
 import pytest
 import runner
@@ -19,7 +14,6 @@ def test_matrix(bench: BenchSession, matrix: tuple[str, schema.Cache], request: 
     fixture_id, cache = matrix
     if cache is schema.Cache.COLD:
         request.getfixturevalue("root")
-    fixture = bench.plan.fixture(fixture_id)
     reporter = request.config.pluginmanager.getplugin("terminalreporter")
 
     def progress(message: str) -> None:
@@ -28,12 +22,7 @@ def test_matrix(bench: BenchSession, matrix: tuple[str, schema.Cache], request: 
 
     try:
         bench.samples += runner.run_matrix(
-            bench.plan,
-            fixture,
-            cache,
-            bench.env,
-            rng=bench.rng,
-            progress=progress,
+            bench.plan, bench.plan.fixture(fixture_id), cache, bench.env, rng=bench.rng, progress=progress
         )
     except runner.BenchmarkFailed as e:
         pytest.fail(str(e))

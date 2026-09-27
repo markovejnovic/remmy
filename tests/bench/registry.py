@@ -1,70 +1,42 @@
 """What the benchmark compares: tools, trees, sampling and the decision rule."""
 
-from __future__ import annotations
-
 import os
 import shutil
 from pathlib import Path
 
-from schema import (
-    Cache,
-    DecisionRule,
-    Fixture,
-    Plan,
-    Sampling,
-    Tool,
-)
+from schema import Cache, DecisionRule, Fixture, Plan, Sampling, Tool
 
 SEED = 20260914
-REFERENCE = "rm"
+PLANS = ("demo", "full")
 
 
 def _brew(name: str) -> str:
     """Absolute path of a Homebrew tool, never a shell alias or shim."""
     for prefix in ("/opt/homebrew/bin", "/usr/local/bin"):
-        candidate = Path(prefix) / name
-        if os.access(candidate, os.X_OK):
-            return str(candidate)
+        if os.access(candidate := f"{prefix}/{name}", os.X_OK):
+            return candidate
     return shutil.which(name) or f"/opt/homebrew/bin/{name}"
 
 
 def perf_tools(remmy: Path) -> tuple[Tool, ...]:
     """The timed competitors. Every one unlinks; none moves to a trash."""
-    grm, bfs = _brew("grm"), _brew("bfs")
+    grm, bfs, r = _brew("grm"), _brew("bfs"), str(remmy)
     return (
-        # BSD rm (fts). The baseline every ratio is taken against.
-        Tool(
-            name="rm",
-            argv=("/bin/rm", "-rf", "--", "{tree}"),
-            requires=("/bin/rm",),
-        ),
+        # BSD rm (fts): the baseline every ratio is taken against.
+        Tool(name="rm", argv=("/bin/rm", "-rf", "--", "{tree}"), requires=("/bin/rm",)),
         # GNU coreutils rm; a separate baseline, never merged with BSD rm.
-        Tool(
-            name="grm",
-            argv=(grm, "-rf", "--", "{tree}"),
-            requires=(grm,),
-        ),
+        Tool(name="grm", argv=(grm, "-rf", "--", "{tree}"), requires=(grm,)),
         # BSD find, depth-first. Absolute path: a shell's `find` may be a bfs alias.
-        Tool(
-            name="find",
-            argv=("/usr/bin/find", "{tree}", "-depth", "-delete"),
-            requires=("/usr/bin/find",),
-        ),
-        # bfs, breadth-first traversal: different directory locality than depth-first.
-        Tool(
-            name="bfs",
-            argv=(bfs, "{tree}", "-delete"),
-            requires=(bfs,),
-        ),
-        # The strongest shell parallel deleter: parallel unlinks of every non-directory,
-        # then a serial directory sweep. Runs via /bin/sh, so a ~1 ms shell fork is
-        # inside its timer. (`-type f` would silently leave symlinks and the tree.)
+        Tool(name="find", argv=("/usr/bin/find", "{tree}", "-depth", "-delete"), requires=("/usr/bin/find",)),
+        # bfs, breadth-first: different directory locality than depth-first.
+        Tool(name="bfs", argv=(bfs, "{tree}", "-delete"), requires=(bfs,)),
+        # The strongest shell parallel deleter: parallel unlinks of every non-directory, then a serial directory
+        # sweep. Runs via /bin/sh, so a ~1 ms shell fork is timed. (`-type f` would leave symlinks and the tree.)
         Tool(
             name="xargs",
             argv=(
                 (
-                    "/usr/bin/find {tree} -depth ! -type d -print0"
-                    " | /usr/bin/xargs -0 -P{threads} -n256 /bin/rm -f"
+                    "/usr/bin/find {tree} -depth ! -type d -print0 | /usr/bin/xargs -0 -P{threads} -n256 /bin/rm -f"
                     " ; /usr/bin/find {tree} -depth -type d -delete"
                 ),
             ),
@@ -72,12 +44,7 @@ def perf_tools(remmy: Path) -> tuple[Tool, ...]:
             requires=("/usr/bin/find", "/usr/bin/xargs", "/bin/rm"),
         ),
         # The subject. Its default thread count is 4 (the sweep includes it).
-        Tool(
-            name="remmy",
-            argv=(str(remmy), "-r", "{tree}"),
-            env={"REMMY_THREADS": "{threads}"},
-            requires=(str(remmy),),
-        ),
+        Tool(name="remmy", argv=(r, "-r", "{tree}"), env={"REMMY_THREADS": "{threads}"}, requires=(r,)),
     )
 
 
@@ -93,24 +60,21 @@ FIXTURES = (
     Fixture(id="F7", title="Flat directory", depth=0, fanout=0, files=58_500),
 )
 
-RULE = DecisionRule(margin=0.05, cliff_threshold=0.33, alpha=0.05)
-
 
 def plan(name: str, remmy: Path) -> Plan:
-    """The named plan: ``demo`` (minutes, warm only) or ``full`` (hours)."""
+    """``demo`` (minutes, warm only) or ``full`` (hours)."""
     tools = perf_tools(remmy)
+    common = {"reference": "rm", "rule": DecisionRule(), "seed": SEED}
     if name == "demo":
         return Plan(
             name="demo",
-            fixtures=(FIXTURES[0],),
+            fixtures=FIXTURES[:1],
             caches={"F0": (Cache.WARM,)},
             tools=tuple(t for t in tools if t.name in ("rm", "xargs", "remmy")),
             threads=(1, 4),
             sampling={Cache.WARM: Sampling(reps=6, rounds=2, warmup=1)},
-            reference=REFERENCE,
-            rule=RULE,
             bootstrap_resamples=2000,
-            seed=SEED,
+            **common,
         )
     if name == "full":
         return Plan(
@@ -123,12 +87,7 @@ def plan(name: str, remmy: Path) -> Plan:
                 Cache.WARM: Sampling(reps=20, rounds=4, warmup=3),
                 Cache.COLD: Sampling(reps=16, rounds=4, warmup=2),
             },
-            reference=REFERENCE,
-            rule=RULE,
             bootstrap_resamples=10_000,
-            seed=SEED,
+            **common,
         )
     raise ValueError(f"unknown plan {name!r}; expected demo or full")
-
-
-PLANS = ("demo", "full")

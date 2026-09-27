@@ -1,0 +1,2 @@
+# Python test harness is not the product; keep it out of GitHub language stats.
+tests/**/*.py linguist-vendored

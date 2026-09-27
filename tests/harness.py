@@ -1,32 +1,17 @@
-"""Running remmy under test: the one place that spawns it and checks for crashes.
-
-Shared by every test module (and the benchmark), so it lives in a plain module
-rather than a conftest, which pytest may load under the same name twice.
-"""
-
-from __future__ import annotations
+"""Runs remmy and checks for crashes. A plain module, not a conftest, so pytest never loads it twice."""
 
 import os
 import resource
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 # Generous: a hang means a scheduler deadlock, which must fail, not stall CI.
 RUN_TIMEOUT = 120
 
-# Markers that mean the process tripped a sanitizer or a hardening assertion.
-CRASH_MARKERS = (
-    "AddressSanitizer",
-    "ThreadSanitizer",
-    "UndefinedBehaviorSanitizer",
-    "LeakSanitizer",
-    "runtime error:",
-    "Assertion failed",
-    "assertion failed",
-    "libc++abi",
-)
+# Sanitizer or hardening-assertion output.
+CRASH_MARKERS = ("Sanitizer", "runtime error:", "Assertion failed", "assertion failed", "libc++abi")
 
 
 @dataclass
@@ -47,45 +32,28 @@ class Result:
 Runner = Callable[..., Result]
 
 
-def _limit_fds(n: int) -> Callable[[], None]:
-    def apply() -> None:
-        # Lower both limits so remmy cannot raise its way out of the squeeze.
-        resource.setrlimit(resource.RLIMIT_NOFILE, (n, n))
-
-    return apply
-
-
-def run_remmy(
-    remmy_bin: Path,
-    args: Sequence[str | os.PathLike[str]],
-    *,
-    cwd: Path,
-    threads: int | str | None = None,
-    fd_limit: int | None = None,
-    env: dict[str, str] | None = None,
-) -> Result:
-    full_env = {k: v for k, v in os.environ.items() if k != "REMMY_THREADS"}
+def remmy_env(threads: int | str | None = None, env: dict[str, str] | None = None) -> dict[str, str]:
+    out = {k: v for k, v in os.environ.items() if k != "REMMY_THREADS"}
     if threads is not None:
-        full_env["REMMY_THREADS"] = str(threads)
-    if env:
-        full_env.update(env)
+        out["REMMY_THREADS"] = str(threads)
+    return out | (env or {})
+
+
+def run_remmy(remmy_bin: Path, args, *, cwd: Path, threads=None, fd_limit: int | None = None, env=None) -> Result:
     argv = [str(remmy_bin), *map(os.fsdecode, args)]
+    # Lower both limits so remmy cannot raise its way out of the squeeze.
+    limit = (lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))) if fd_limit else None
     proc = subprocess.run(
         argv,
         cwd=cwd,
-        env=full_env,
+        env=remmy_env(threads, env),
         stdin=subprocess.DEVNULL,
         capture_output=True,
         timeout=RUN_TIMEOUT,
-        preexec_fn=_limit_fds(fd_limit) if fd_limit else None,
+        preexec_fn=limit,
         check=False,
     )
-    res = Result(
-        argv,
-        proc.returncode,
-        proc.stdout.decode(errors="surrogateescape"),
-        proc.stderr.decode(errors="surrogateescape"),
-    )
+    res = Result(argv, proc.returncode, *(s.decode(errors="surrogateescape") for s in (proc.stdout, proc.stderr)))
     assert proc.returncode >= 0, f"remmy died from signal {-proc.returncode}\n{res}"
     for marker in CRASH_MARKERS:
         assert marker not in res.stderr, f"remmy reported {marker!r}\n{res}"

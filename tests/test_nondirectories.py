@@ -1,16 +1,14 @@
 """Removing non-directory operands: every inode type, names, and links."""
 
-from __future__ import annotations
-
-import errno
 import os
+from errno import EACCES, ENOENT, ENOTDIR
+from os import strerror
 from pathlib import Path
 
 import fstree
 import pytest
 from fstree import Hardlink, Special, Symlink
 from harness import Runner
-from pytest_check import check
 
 
 @pytest.mark.parametrize("recursive", [False, True], ids=["plain", "-r"])
@@ -27,254 +25,132 @@ from pytest_check import check
 )
 def test_removes_each_inode_type(run: Runner, workdir: Path, node: object, recursive: bool) -> None:
     fstree.build(workdir, {"victim": node, "keep": "k"})
-
     res = run(*(["-r"] if recursive else []), "victim")
-
-    with check:
-        assert (res.returncode, res.stdout, res.stderr) == (0, "", ""), res
-    with check:
-        assert fstree.listing(workdir) == {"keep"}
+    assert (res.returncode, res.stdout, res.stderr, fstree.listing(workdir)) == (0, "", "", {"keep"}), res
 
 
 def test_fifo_removal_does_not_block_on_open(run: Runner, workdir: Path) -> None:
     # Opening a reader-less FIFO would hang; the run timeout turns that into a failure.
     fstree.build(workdir, {"p": Special.FIFO, "d": {"p": Special.FIFO, "q": Special.FIFO}})
-
     res = run("-r", "p", "d")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert fstree.listing(workdir) == set()
+    assert (res.returncode, fstree.listing(workdir)) == (0, set()), res
 
 
 def test_read_only_file_is_removed_without_prompting(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"ro": "x"})
     os.chmod(workdir / "ro", 0o000)
-
     res = run("ro")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert not fstree.exists(workdir / "ro")
+    assert (res.returncode, fstree.exists(workdir / "ro")) == (0, False), res
 
 
 def test_symlink_to_file_removes_link_not_target(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"target": "precious", "link": Symlink("target")})
-
     res = run("link")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert fstree.listing(workdir) == {"target"}
-    with check:
-        assert (workdir / "target").read_text() == "precious"
+    assert (res.returncode, fstree.listing(workdir), (workdir / "target").read_text()) == (0, {"target"}, "precious")
 
 
 @pytest.mark.parametrize("recursive", [False, True], ids=["plain", "-r"])
 def test_symlink_to_directory_removes_only_the_link(run: Runner, workdir: Path, recursive: bool) -> None:
     fstree.build(workdir, {"real": {"a": "1", "sub": {"b": "2"}}, "link": Symlink("real")})
     before = fstree.snapshot_dir(workdir / "real")
-
     res = run(*(["-r"] if recursive else []), "link")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert not fstree.exists(workdir / "link")
-    with check:
-        assert fstree.snapshot_dir(workdir / "real") == before
+    assert (res.returncode, fstree.exists(workdir / "link")) == (0, False), res
+    assert fstree.snapshot_dir(workdir / "real") == before
 
 
 def test_symlink_with_absolute_target_outside_workdir(run: Runner, workdir: Path, tmp_path: Path) -> None:
     outside = fstree.build(tmp_path / "outside", {"x": "keep me", "d": {"y": "and me"}})
     before = fstree.snapshot_dir(outside)
     os.symlink(outside, workdir / "abs")
-
     res = run("-r", "abs")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert not fstree.exists(workdir / "abs")
-    with check:
-        assert fstree.snapshot_dir(outside) == before
+    assert (res.returncode, fstree.exists(workdir / "abs")) == (0, False), res
+    assert fstree.snapshot_dir(outside) == before
 
 
 def test_hard_link_removal_leaves_other_names_intact(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"a": "shared", "b": Hardlink("a"), "d": {"c": Hardlink("../a")}})
-
     res = run("a", "d/c")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert fstree.listing(workdir) == {"b", "d"}
-    with check:
-        assert (workdir / "b").read_text() == "shared"
-    with check:
-        assert os.lstat(workdir / "b").st_nlink == 1
+    b = workdir / "b"
+    assert (res.returncode, fstree.listing(workdir), b.read_text(), b.lstat().st_nlink) == (0, {"b", "d"}, "shared", 1)
 
 
 def test_many_operands_in_one_invocation(run: Runner, workdir: Path) -> None:
     names = [f"f{i:05}" for i in range(5000)]
-    fstree.build(workdir, {n: "" for n in names} | {"keep": "k"})
-
+    fstree.build(workdir, dict.fromkeys(names, "") | {"keep": "k"})
     res = run(*names)
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert fstree.listing(workdir) == {"keep"}
+    assert (res.returncode, fstree.listing(workdir)) == (0, {"keep"}), res
 
 
 def test_absolute_and_relative_operands(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"a": "", "sub": {"b": "", "c": ""}})
-
     res = run(workdir / "a", "sub/b", "./sub/../sub/c")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert fstree.listing(workdir) == {"sub"}
+    assert (res.returncode, fstree.listing(workdir)) == (0, {"sub"}), res
 
 
 def test_cwd_is_respected(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"inner": {"same": "inner"}, "same": "outer"})
-
     res = run("same", cwd=workdir / "inner")
-
-    with check:
-        assert res.returncode == 0, res
-    with check:
-        assert fstree.listing(workdir) == {"inner", "same"}
-    with check:
-        assert (workdir / "same").read_text() == "outer"
-
-
-# --- Failures ----------------------------------------------------------------
+    listing, text = fstree.listing(workdir), (workdir / "same").read_text()
+    assert (res.returncode, listing, text) == (0, {"inner", "same"}, "outer"), res
 
 
 def test_missing_operand_reports_enoent(run: Runner, workdir: Path) -> None:
     res = run("ghost")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert res.stdout == ""
-    with check:
-        assert len(res.errors) == 1
-    with check:
-        assert ": ghost: " in res.stderr
-    with check:
-        assert os.strerror(errno.ENOENT) in res.stderr
+    assert (res.returncode, res.stdout, len(res.errors)) == (1, "", 1), res
+    assert ": ghost: " in res.stderr and strerror(ENOENT) in res.stderr, res
 
 
 def test_force_silences_only_missing_operands(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"a": "", "f": "", "keep": ""})
-
     res = run("-f", "ghost", "", "nodir/x", "a", "f/")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert len(res.errors) == 1, res
-    with check:
-        assert res.stderr.endswith(f": f/: {os.strerror(errno.ENOTDIR)}\n"), res
-    with check:
-        assert fstree.listing(workdir) == {"f", "keep"}
+    assert (res.returncode, len(res.errors), fstree.listing(workdir)) == (1, 1, {"f", "keep"}), res
+    assert res.stderr.endswith(f": f/: {strerror(ENOTDIR)}\n"), res
 
 
 def test_failures_do_not_stop_later_operands(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"a": "", "b": "", "dir": {"x": ""}, "keep": ""})
-
     res = run("a", "ghost1", "dir", "b", "ghost2")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert fstree.listing(workdir) == {"dir", "dir/x", "keep"}
-    msgs = "\n".join(res.errors)
-    with check:
-        assert len(res.errors) == 3, res
-    for n in (": ghost1: ", ": ghost2: ", ": dir: "):
-        with check:
-            assert n in msgs
+    assert (res.returncode, len(res.errors), fstree.listing(workdir)) == (1, 3, {"dir", "dir/x", "keep"}), res
     # Errors are reported in operand order.
-    with check:
-        assert msgs.index(": ghost1: ") < msgs.index(": dir: ") < msgs.index(": ghost2: ")
+    msgs = "\n".join(res.errors)
+    assert -1 < msgs.find(": ghost1: ") < msgs.find(": dir: ") < msgs.find(": ghost2: "), res
 
 
 def test_same_file_twice_removes_once_and_reports_once(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"f": ""})
-
     res = run("f", "f")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert not fstree.exists(workdir / "f")
-    with check:
-        assert len(res.errors) == 1, res
-    with check:
-        assert os.strerror(errno.ENOENT) in res.stderr
+    assert (res.returncode, fstree.exists(workdir / "f"), len(res.errors)) == (1, False, 1), res
+    assert strerror(ENOENT) in res.stderr, res
 
 
 def test_trailing_slash_on_file_is_not_a_directory(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"f": "keep"})
-
     res = run("f/")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert os.strerror(errno.ENOTDIR) in res.stderr
-    with check:
-        assert (workdir / "f").read_text() == "keep"
+    assert (res.returncode, (workdir / "f").read_text()) == (1, "keep"), res
+    assert strerror(ENOTDIR) in res.stderr, res
 
 
 def test_file_in_unwritable_directory_is_reported(run: Runner, workdir: Path, is_root: bool) -> None:
-    if is_root:
-        pytest.skip("root bypasses directory write permission")
-    fstree.build(workdir, {"locked": {"f": "x"}})
-
-    with fstree.chmod(workdir / "locked", 0o555):
-        res = run("locked/f")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert ": locked/f: " in res.stderr
-    with check:
-        assert os.strerror(errno.EACCES) in res.stderr
-    with check:
-        assert fstree.exists(workdir / "locked/f")
+    _check_locked_parent(run, workdir, is_root, 0o555)
 
 
 def test_path_through_unsearchable_directory_is_reported(run: Runner, workdir: Path, is_root: bool) -> None:
+    _check_locked_parent(run, workdir, is_root, 0o000)
+
+
+def _check_locked_parent(run: Runner, workdir: Path, is_root: bool, mode: int) -> None:
     if is_root:
-        pytest.skip("root bypasses directory search permission")
+        pytest.skip("root bypasses directory permissions")
     fstree.build(workdir, {"locked": {"f": "x"}})
-
-    with fstree.chmod(workdir / "locked", 0o000):
+    with fstree.chmod(workdir / "locked", mode):
         res = run("locked/f")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert os.strerror(errno.EACCES) in res.stderr
-    with check:
-        assert fstree.exists(workdir / "locked/f")
+    assert (res.returncode, fstree.exists(workdir / "locked/f")) == (1, True), res
+    assert strerror(EACCES) in res.stderr, res
+    if mode == 0o555:
+        assert ": locked/f: " in res.stderr, res
 
 
 def test_empty_string_operand_is_an_error(run: Runner, workdir: Path) -> None:
     fstree.build(workdir, {"keep": ""})
-
     res = run("", "keep")
-
-    with check:
-        assert res.returncode == 1, res
-    with check:
-        assert fstree.listing(workdir) == set()
+    assert (res.returncode, fstree.listing(workdir)) == (1, set()), res
