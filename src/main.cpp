@@ -48,7 +48,6 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -95,49 +94,21 @@ static auto ThreadCount() -> std::uint16_t {
   return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
 }
 
-/// @brief strerror(3)'s text, held in a buffer of its own so that workers can
-///        report errors concurrently (strerror_r(3); an unknown number still
-///        gets rm's "Unknown error: N").
-class ErrorText {
- public:
-  explicit ErrorText(int error) noexcept
-      : view_(Text(::strerror_r(error, text_.data(), text_.size()))) {}
-
-  [[nodiscard]] auto View() const noexcept -> std::string_view { return view_; }
-
- private:
-  /// @brief XSI strerror_r returns an int and fills the buffer.
-  [[nodiscard]] auto Text(int /*result*/) const noexcept -> const char* {
-    return text_.data();
-  }
-
-  /// @brief GNU strerror_r (glibc with _GNU_SOURCE) returns the text, which
-  ///        need not be in the buffer.
-  [[nodiscard]] static auto Text(const char* text) noexcept -> const char* {
-    return text;
-  }
-
-  static constexpr std::size_t kSize = 128;
-  std::array<char, kSize> text_{};
-  std::string_view view_;
-};
-
 /// @brief Reports a failure the way BSD rm's warn(3) does:
 ///        "<prog>: <path>: <strerror>", with `path` printed as given.
 auto WarnAt(std::string_view prog, std::string_view path, int error) noexcept
     -> void {
-  const ErrorText text(error);
   std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}: {}",
-                                    prog, path, text.View());
+                                    prog, path, cutils::os::StrError(error));
 }
 
 /// @brief WarnAt for the entry `name` of the directory at `dir`, which is
 ///        the path fts(3) gives rm for it.
 auto WarnAt(std::string_view prog, std::string_view dir, std::string_view name,
             int error) noexcept -> void {
-  const ErrorText text(error);
-  std::ignore = cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}/{}: {}",
-                                    prog, dir, name, text.View());
+  std::ignore =
+      cutils::io::PrintLn(cutils::io::stderr_writer, "{}: {}/{}: {}", prog, dir,
+                          name, cutils::os::StrError(error));
 }
 
 /// @brief Traverses directory, unlinks files, schedules subdirs as tasks.

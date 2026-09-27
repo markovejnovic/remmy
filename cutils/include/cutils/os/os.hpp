@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -68,6 +69,55 @@ using RawDirent = ::dirent64;
   const char* name = ::getprogname();
 #endif
   return name != nullptr ? name : "";
+}
+
+/// @brief Buffer size for StrErrorInto.
+///
+/// No libc defines one: NL_TEXTMAX is 2048 on macOS but INT_MAX on glibc. The
+/// longest strerror(3) text on either is ~50 bytes, and strerror_r(3)
+/// truncates rather than overflows, so too small costs text, not safety.
+inline constexpr std::size_t kStrErrorBytes = 128;
+
+namespace detail {
+
+/// @brief XSI strerror_r returns an int and writes the text into the buffer.
+[[nodiscard]] inline auto StrErrorText(int /*result*/,
+                                       const char* buffer) noexcept -> const
+    char* {
+  return buffer;
+}
+
+/// @brief GNU strerror_r (glibc under _GNU_SOURCE) returns the text, which
+///        need not be in the buffer.
+[[nodiscard]] inline auto StrErrorText(const char* text,
+                                       const char* /*buffer*/) noexcept -> const
+    char* {
+  return text;
+}
+
+}  // namespace detail
+
+/// @brief strerror_r(3) with one signature on every libc.
+///
+/// @return The text, in `buffer` or in the libc's own storage; valid while
+///         `buffer` is.
+[[nodiscard]] inline auto StrErrorInto(int error,
+                                       std::span<char> buffer) noexcept
+    -> std::string_view {
+  if (buffer.empty()) {
+    return {};
+  }
+  buffer.front() = '\0';
+  return detail::StrErrorText(::strerror_r(error, buffer.data(), buffer.size()),
+                              buffer.data());
+}
+
+/// @brief A thread-safe strerror(3).
+///
+/// @return The text, valid until this thread next calls StrError.
+[[nodiscard]] inline auto StrError(int error) noexcept -> std::string_view {
+  thread_local std::array<char, kStrErrorBytes> buffer{};
+  return StrErrorInto(error, buffer);
 }
 
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {
