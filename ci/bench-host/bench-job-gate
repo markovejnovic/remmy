@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# The runner's job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED): runs before
+# any step of every job, and a non-zero exit fails the job before the
+# repository is even checked out. It is the one gate a pull request cannot
+# edit: a PR supplies its own copy of bench.yml, but not this file, which is
+# root-owned, nor the event data, which comes from GitHub.
+#
+# Admits only code the repository owner vouched for: jobs of REPO, triggered
+# and run by a trusted actor, on push, schedule or dispatch, or on a PR whose
+# branch lives in REPO and whose author is trusted. /etc/remmy-bench/gate.conf
+# (written by provision.sh) sets REPO and TRUSTED_ACTORS.
+set -euo pipefail
+
+refuse() {
+	echo "bench-job-gate: refusing this job: $*" >&2
+	echo "Only code the repository owner reviewed runs on the benchmark machine (ci/bench-host)." >&2
+	exit 1
+}
+
+# shellcheck source=/dev/null
+. /etc/remmy-bench/gate.conf
+[[ -n ${REPO:-} && -n ${TRUSTED_ACTORS:-} ]] || refuse "gate.conf is incomplete"
+
+trusted() {
+	local who="$1" t
+	for t in $TRUSTED_ACTORS; do [[ $who == "$t" ]] && return 0; done
+	return 1
+}
+
+[[ ${GITHUB_REPOSITORY:-} == "$REPO" ]] || refuse "repository '${GITHUB_REPOSITORY:-}' is not $REPO"
+trusted "${GITHUB_ACTOR:-}" || refuse "actor '${GITHUB_ACTOR:-}' is not trusted"
+# A re-run is started by whoever clicks it, not by the original actor.
+trusted "${GITHUB_TRIGGERING_ACTOR:-$GITHUB_ACTOR}" ||
+	refuse "triggering actor '${GITHUB_TRIGGERING_ACTOR:-}' is not trusted"
+
+case "${GITHUB_EVENT_NAME:-}" in
+push | schedule | workflow_dispatch) ;;
+pull_request)
+	event="${GITHUB_EVENT_PATH:?}"
+	head="$(jq -r '.pull_request.head.repo.full_name // ""' "$event")"
+	author="$(jq -r '.pull_request.user.login // ""' "$event")"
+	[[ $head == "$REPO" ]] || refuse "pull request from '$head', not a branch of $REPO"
+	trusted "$author" || refuse "pull request author '$author' is not trusted"
+	;;
+*) refuse "event '${GITHUB_EVENT_NAME:-}' is not one the benchmarks use" ;;
+esac
+
+echo "bench-job-gate: admitted ${GITHUB_EVENT_NAME} by ${GITHUB_ACTOR} on ${GITHUB_REF:-?}"

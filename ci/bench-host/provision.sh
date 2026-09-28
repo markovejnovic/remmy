@@ -22,6 +22,8 @@
 # HOUSEKEEPING_CPUS CPUs left to the OS (default: cpu0 and its SMT siblings).
 #                   Every other CPU belongs to the runner and the benchmarks.
 # REPO_URL          default https://github.com/markovejnovic/remmy
+# TRUSTED_ACTORS    GitHub users whose jobs may run here (default: the
+#                   repository's owner); see bench-job-gate.
 #
 # When a change needs a reboot to apply, /run/remmy-bench-reboot-required exists
 # afterwards (a reboot clears it).
@@ -29,6 +31,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_URL="${REPO_URL:-https://github.com/markovejnovic/remmy}"
+REPO="${REPO_URL#https://github.com/}"
+TRUSTED_ACTORS="${TRUSTED_ACTORS:-${REPO%%/*}}"
+# The runner release to install, and its SHA-256 from the release notes. The
+# runner updates itself from GitHub afterwards; pinning keeps the first install
+# to a reviewed version. Bump both together.
+RUNNER_VERSION=2.337.0
+declare -A RUNNER_SHA256=(
+	[x64]=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
+	[arm64]=9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393
+)
 RUNNER_USER=gh-runner
 RUNNER_DIR=/opt/actions-runner
 RUNNER_LABELS=remmy-bench
@@ -45,6 +57,8 @@ note() { printf '    %s\n' "$*"; }
 die() { printf 'provision: %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "run as root"
+[[ $REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "bad REPO_URL '$REPO_URL'"
+[[ $TRUSTED_ACTORS =~ ^[A-Za-z0-9-]+( [A-Za-z0-9-]+)*$ ]] || die "bad TRUSTED_ACTORS '$TRUSTED_ACTORS'"
 grep -q 'VERSION_ID="24.04"' /etc/os-release || die "written for Ubuntu 24.04"
 
 # put MODE OWNER DEST: writes stdin to DEST only if it differs. Returns 0 when
@@ -129,6 +143,23 @@ put 0755 root:root /usr/local/sbin/bench-ctl <"$HERE/bench-ctl" || true
 put 0755 root:root /usr/local/sbin/bench-tune <"$HERE/bench-tune" || true
 visudo -cf "$HERE/sudoers" >/dev/null || die "sudoers does not parse"
 put 0440 root:root /etc/sudoers.d/bench <"$HERE/sudoers" || true
+put 0755 root:root /usr/local/sbin/bench-job-gate <"$HERE/bench-job-gate" || true
+printf 'REPO=%q\nTRUSTED_ACTORS=%q\n' "$REPO" "$TRUSTED_ACTORS" |
+	put 0644 root:root /etc/remmy-bench/gate.conf || true
+
+log "SSH"
+# Keys only. Vultr images allow root password logins; this file sorts before
+# cloud-init's, and sshd keeps the first value it reads.
+if ! compgen -G '/root/.ssh/authorized_keys' >/dev/null && ! compgen -G '/home/*/.ssh/authorized_keys' >/dev/null; then
+	note "no authorized_keys anywhere: leaving password logins on rather than locking you out"
+elif printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' \
+	'PermitRootLogin prohibit-password' | put 0644 root:root /etc/ssh/sshd_config.d/10-remmy-bench.conf; then
+	sshd -t || die "sshd rejects its configuration"
+	systemctl reload ssh.service 2>/dev/null || true
+	note "password logins off"
+else
+	note "keys only"
+fi
 
 log "measured volume /bench"
 install -d /bench
@@ -241,26 +272,33 @@ if [[ -f $RUNNER_DIR/.runner && ${RUNNER_RESET:-} == yes ]]; then
 fi
 if [[ ! -x $RUNNER_DIR/config.sh ]]; then
 	case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; *) die "unsupported $(uname -m)" ;; esac
-	version="$(curl -fsSL --retry 5 https://api.github.com/repos/actions/runner/releases/latest | jq -r .tag_name)"
-	version="${version#v}"
-	[[ $version =~ ^[0-9.]+$ ]] || die "could not find the latest runner release"
 	install -d -o "$RUNNER_USER" -g "$RUNNER_USER" "$RUNNER_DIR"
 	curl -fsSL --retry 5 -o /tmp/actions-runner.tar.gz \
-		"https://github.com/actions/runner/releases/download/v$version/actions-runner-linux-$arch-$version.tar.gz"
+		"https://github.com/actions/runner/releases/download/v$RUNNER_VERSION/actions-runner-linux-$arch-$RUNNER_VERSION.tar.gz"
+	echo "${RUNNER_SHA256[$arch]}  /tmp/actions-runner.tar.gz" | sha256sum -c --quiet ||
+		{ rm -f /tmp/actions-runner.tar.gz; die "runner download does not match its pinned SHA-256"; }
 	sudo -u "$RUNNER_USER" tar -xzf /tmp/actions-runner.tar.gz -C "$RUNNER_DIR"
 	rm -f /tmp/actions-runner.tar.gz
-	note "installed runner $version"
+	note "installed runner $RUNNER_VERSION"
 fi
-chown -R "$RUNNER_USER:" "$RUNNER_DIR"
+# Everything but .env (root-owned below, so no job can drop the gate).
+find "$RUNNER_DIR" -path "$RUNNER_DIR/.env" -prune -o ! -user "$RUNNER_USER" -exec chown -h "$RUNNER_USER:" {} +
 if [[ ! -f $RUNNER_DIR/.runner ]]; then
 	[[ -n $token ]] || die "the runner is not configured: pass RUNNER_TOKEN_FILE or RUNNER_TOKEN"
 	if [[ -x $RUNNER_DIR/bin/installdependencies.sh ]]; then "$RUNNER_DIR/bin/installdependencies.sh" &>/dev/null; fi
-	sudo -u "$RUNNER_USER" "$RUNNER_DIR/config.sh" --unattended --replace \
+	# From its own directory: config.sh checks its libraries by relative path.
+	(cd "$RUNNER_DIR" && sudo -u "$RUNNER_USER" ./config.sh --unattended --replace \
 		--url "$REPO_URL" --token "$token" --name "$(hostname)-bench" \
-		--labels "$RUNNER_LABELS" --work "$RUNNER_HOME/work"
+		--labels "$RUNNER_LABELS" --work "$RUNNER_HOME/work")
 	runner_registered=1
 fi
 runner_changed=0
+# The runner reads .env at start. Root-owned, so no job can drop the gate.
+env_file="$RUNNER_DIR/.env"
+{
+	grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$env_file" 2>/dev/null || true
+	echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate"
+} | put 0644 root:root "$env_file" && runner_changed=1
 put 0644 root:root /etc/systemd/system/gh-runner.service <<EOF && runner_changed=1
 [Unit]
 Description=GitHub Actions runner (remmy benchmarks)
@@ -283,8 +321,14 @@ EOF
 [[ $runner_changed == 1 ]] && systemctl daemon-reload
 systemctl enable --quiet gh-runner.service
 if ! systemctl is-active --quiet gh-runner.service; then
-	systemctl start gh-runner.service
-	note "started the runner"
+	if [[ -e $REBOOT_MARKER ]]; then
+		# Started now, it would take a queued job before the pending reboot, and
+		# time it with half-applied tuning. It starts on boot instead.
+		note "the runner starts after the reboot"
+	else
+		systemctl start gh-runner.service
+		note "started the runner"
+	fi
 elif [[ $runner_changed == 1 || -n ${runner_registered:-} ]]; then
 	# Restarting mid-job would fail that job: leave it for the reboot instead.
 	if runner_busy; then
@@ -299,10 +343,10 @@ else
 fi
 
 log "toolchain image"
-if sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman image exists '$GCC_IMAGE'"; then
+if sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman --log-level=error image exists '$GCC_IMAGE'"; then
 	note "present"
 else
-	sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman pull -q '$GCC_IMAGE' >/dev/null"
+	sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman --log-level=error pull -q '$GCC_IMAGE' >/dev/null"
 	note "pulled"
 fi
 

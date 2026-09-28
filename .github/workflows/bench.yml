@@ -1,16 +1,17 @@
 name: Bench
 
 # Times the release binary on the dedicated bare-metal runner (ci/bench-host).
-# demo (minutes) runs on every push to main and every same-repo PR; a fork's PR
-# runs it only when a maintainer adds the `bench` label, once per labelling,
-# because the job executes the PR's code on our machine. full (hours) runs
-# nightly when main has moved. This workflow holds no secrets: bench-track.yml
-# uploads the results to Bencher once a run finishes.
+# demo (minutes) runs on every push to main and on the owner's own PRs; full
+# (hours) runs nightly when main has moved. Only code the owner reviewed runs on
+# that machine: never a fork's PR, nor anyone else's. The plan job skips other
+# runs cleanly, but the guarantee is ci/bench-host/bench-job-gate on the runner,
+# because a PR brings its own copy of this file. This workflow holds no
+# secrets: bench-track.yml uploads the results to Bencher.
 on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, reopened, synchronize, labeled]
+    types: [opened, reopened, synchronize]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -44,20 +45,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
-          ACTION: ${{ github.event.action }}
-          LABEL: ${{ github.event.label.name }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          # Keep in step with TRUSTED_ACTORS on the runner (mkbench.sh --trust).
+          TRUSTED: ${{ vars.BENCH_TRUSTED_ACTORS || github.repository_owner }}
           SHA: ${{ github.sha }}
           INPUT_SUITE: ${{ inputs.suite }}
         run: |
           run=false suite=demo
+          trusted() { [[ " $TRUSTED " == *" $1 "* ]]; }
+          if ! trusted "$ACTOR" || ! trusted "$TRIGGERING_ACTOR"; then
+            echo "not benchmarking: started by $ACTOR/$TRIGGERING_ACTOR, not one of: $TRUSTED"
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "suite=demo" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$EVENT" in
             pull_request)
-              if [[ "$HEAD_REPO" == "$REPO" ]]; then
-                # Labelling a same-repo PR would only repeat its last run.
-                [[ "$ACTION" != labeled ]] && run=true
-              elif [[ "$ACTION" == labeled && "$LABEL" == bench ]]; then
+              if [[ "$HEAD_REPO" == "$REPO" ]] && trusted "$AUTHOR"; then
                 run=true
+              else
+                echo "not benchmarking: PR by $AUTHOR from $HEAD_REPO"
               fi
               ;;
             push) run=true ;;
@@ -110,9 +119,12 @@ jobs:
               strip build/gcc-dist/remmy
             '
 
+      # No GitHub cache: a job on this machine must never write an entry that a
+      # GitHub-hosted job (a release, say) could restore. uv is pinned.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          enable-cache: true
+          version: "0.12.19"
+          enable-cache: false
       - run: uv sync --locked
 
       - name: Trim /bench

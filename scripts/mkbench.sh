@@ -16,15 +16,18 @@
 #       --format            allow erasing a DEV that holds another filesystem
 #       --housekeeping CPUS OS CPUs, e.g. 0-1 (default: cpu0 and its SMT sibling)
 #   -R, --repo OWNER/NAME   default markovejnovic/remmy
+#       --trust USER        GitHub user whose jobs may run on the server;
+#                           repeat for several (default: the repo's owner)
 #       --no-reboot         don't reboot even if a change needs it
-#       --force             reboot even while the runner is running a job
+#       --force             reboot at once, even while the runner runs a job
+#                           (by default a needed reboot waits for the job)
 #   -h, --help
 #
 # Safe to run any number of times: it copies ci/bench-host to the server, runs
 # provision.sh (which only changes what differs), registers the runner only if
 # GitHub doesn't already know it, reboots only when a change needs it, and
-# verifies the server. Then it configures the repository: the `bench` label,
-# approval for every outside contributor's workflow runs, the BENCHER_API_KEY
+# verifies the server. Then it configures the repository: approval for every
+# outside contributor's workflow runs, the BENCHER_API_KEY
 # secret (from the environment: a user API key from bencher.dev > API Keys),
 # and a first benchmark run on main if there has never been one.
 set -euo pipefail
@@ -38,6 +41,7 @@ FORMAT=""
 HOUSEKEEPING=""
 REBOOT=yes
 FORCE=""
+TRUST=()
 REMOTE_DIR=.cache/remmy-bench-host
 MARKER=/run/remmy-bench-reboot-required
 
@@ -55,6 +59,7 @@ while (($#)); do
 	--format) FORMAT=yes ;;
 	--housekeeping) HOUSEKEEPING="${2:?}"; shift ;;
 	-R | --repo) REPO="${2:?}"; shift ;;
+	--trust) TRUST+=("${2:?}"); shift ;;
 	--no-reboot) REBOOT="" ;;
 	--force) FORCE=yes ;;
 	-h | --help) usage; exit 0 ;;
@@ -68,6 +73,9 @@ case ${#target[@]} in
 2) DEST="${target[0]}@${target[1]}" ;;
 *) usage >&2; exit 64 ;;
 esac
+[[ $REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "bad --repo '$REPO'"
+((${#TRUST[@]})) || TRUST=("${REPO%%/*}")
+for user in "${TRUST[@]}"; do [[ $user =~ ^[A-Za-z0-9-]+$ ]] || die "bad --trust '$user'"; done
 [[ -z $HOUSEKEEPING || $HOUSEKEEPING =~ ^[0-9,-]+$ ]] || die "bad --housekeeping '$HOUSEKEEPING'"
 [[ -z $DEVICE || $DEVICE == none || $DEVICE =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || die "bad --device '$DEVICE'"
 
@@ -110,6 +118,11 @@ elif remote 'sudo -n true' &>/dev/null; then
 else
 	die "$DEST needs passwordless sudo (or connect as root)"
 fi
+# These come from the server: check them before they reach a local command.
+[[ $uid =~ ^[0-9]+$ ]] || die "unexpected uid from the server: '$uid'"
+[[ $host =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$ ]] || die "unexpected hostname from the server: '$host'"
+[[ $home =~ ^/[A-Za-z0-9/_.-]+$ ]] || die "unexpected home directory from the server: '$home'"
+[[ $configured == yes || $configured == no ]] || die "unexpected runner state from the server: '$configured'"
 REMOTE_DIR="$home/$REMOTE_DIR"
 RUNNER_NAME="$host-bench"
 echo "host $host, runner $RUNNER_NAME, runner configured: $configured"
@@ -137,7 +150,7 @@ if [[ -n $token_needed ]]; then
 fi
 
 log "provisioning"
-env_args=("REPO_URL=https://github.com/$REPO")
+env_args=("REPO_URL=https://github.com/$REPO" "TRUSTED_ACTORS='${TRUST[*]}'")
 [[ -n $DEVICE ]] && env_args+=("BENCH_DEVICE=$DEVICE")
 [[ -n $FORMAT ]] && env_args+=(BENCH_FORMAT=yes)
 [[ -n $HOUSEKEEPING ]] && env_args+=("HOUSEKEEPING_CPUS=$HOUSEKEEPING")
@@ -150,33 +163,21 @@ tty=()
 remote "rm -f '$REMOTE_DIR/token'" || true
 ((status == 0)) || die "provision.sh failed (exit $status); fix the cause and run this again"
 
-if remote "test -e $MARKER"; then
-	if [[ -z $REBOOT ]]; then
-		echo "A reboot is needed; skipped (--no-reboot). Run this again without it later."
-	else
-		state="$(github_runner "$RUNNER_NAME")"
-		if [[ $(field busy "$state") == true && -z $FORCE ]]; then
-			die "a reboot is needed but the runner is running a job; run again when it's idle (or --force)"
-		fi
-		log "rebooting $host"
-		boot_id="$(remote cat /proc/sys/kernel/random/boot_id)"
-		remote "$SUDO systemctl reboot" &>/dev/null || true
-		"${SSH[@]}" -O exit "$DEST" &>/dev/null || true
-		sleep 10
-		for ((i = 0; i < 60; i++)); do
-			now="$(remote cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
-			[[ -n $now && $now != "$boot_id" ]] && break
-			sleep 10
-		done
-		[[ -n $now && $now != "$boot_id" ]] || die "$host did not come back within 10 minutes"
-	fi
-fi
-
 log "configuring $REPO"
-gh label create bench -R "$REPO" --force --color d93f0b \
-	--description "Maintainers: run the benchmark on this fork's PR (re-add after each push)" >/dev/null
-echo "  ok    label bench"
-# Fork PRs run code on the server: every outside contributor's run waits for approval.
+# bench.yml's plan job reads the same list, to skip (not fail) other runs.
+if [[ "${TRUST[*]}" == "${REPO%%/*}" ]]; then
+	gh variable delete BENCH_TRUSTED_ACTORS -R "$REPO" &>/dev/null || true
+else
+	gh variable set BENCH_TRUSTED_ACTORS -R "$REPO" --body "${TRUST[*]}"
+fi
+echo "  ok    trusted: ${TRUST[*]}"
+# Fork PRs never reach the server (bench-job-gate refuses them); the label that
+# once let a maintainer opt one in is gone.
+if gh label list -R "$REPO" --json name -q '.[].name' | grep -qx bench; then
+	gh label delete bench -R "$REPO" --yes >/dev/null
+fi
+echo "  ok    no bench label"
+# A second guard: GitHub holds an outside contributor's runs for approval.
 policy=all_external_contributors
 if [[ "$(gh api "repos/$REPO/actions/permissions/fork-pr-contributor-approval" -q .approval_policy)" != "$policy" ]]; then
 	gh api -X PUT "repos/$REPO/actions/permissions/fork-pr-contributor-approval" -f approval_policy="$policy"
@@ -193,13 +194,48 @@ else
 	printf '        BENCHER_API_KEY=<key> in the environment\n'
 fi
 
+if remote "test -e $MARKER"; then
+	if [[ -z $REBOOT ]]; then
+		echo "A reboot is needed; skipped (--no-reboot). Run this again without it later."
+	else
+		if [[ -z $FORCE ]]; then
+			# A reboot mid-job would fail that job: wait for it to finish.
+			waited=""
+			while [[ $(field busy "$(github_runner "$RUNNER_NAME")") == true ]]; do
+				[[ -n $waited ]] || echo "A reboot is needed; waiting for the runner's job to finish (Ctrl-C and run again later is fine)"
+				waited=yes
+				sleep 30
+			done
+			# Stop it so no new job starts between this check and the reboot.
+			remote "$SUDO systemctl stop gh-runner.service" || true
+		fi
+		log "rebooting $host"
+		boot_id="$(remote cat /proc/sys/kernel/random/boot_id)"
+		remote "$SUDO systemctl reboot" &>/dev/null || true
+		"${SSH[@]}" -O exit "$DEST" &>/dev/null || true
+		sleep 10
+		for ((i = 0; i < 60; i++)); do
+			now="$(remote cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+			[[ -n $now && $now != "$boot_id" ]] && break
+			sleep 10
+		done
+		[[ -n $now && $now != "$boot_id" ]] || die "$host did not come back within 10 minutes"
+	fi
+fi
+
 log "verifying"
 fail=0
 check() {
 	if remote "$2" &>/dev/null; then printf '  ok    %s\n' "$1"; else printf '  FAIL  %s\n' "$1"; fail=1; fi
 }
 check "bench-tune ran" 'systemctl is-active --quiet bench-tune.service'
-check "runner service active" 'systemctl is-active --quiet gh-runner.service'
+pending=""
+[[ -z $REBOOT ]] && remote "test -e $MARKER" && pending=yes
+if [[ -n $pending ]]; then
+	printf '  skip  runner service active (starts after the pending reboot)\n'
+else
+	check "runner service active" 'systemctl is-active --quiet gh-runner.service'
+fi
 check "runner in bench.slice" 'systemctl show -p Slice --value gh-runner.service | grep -qx bench.slice'
 check "/bench ready, owned by gh-runner" '
 	test "$(stat -c %U /bench)" = gh-runner && { mountpoint -q /bench || test -e /var/lib/remmy-bench/bench-on-rootfs; }'
@@ -212,9 +248,13 @@ check "no swap" 'test -z "$(swapon --noheadings)"'
 check "governor is performance (or none)" \
 	'! grep -hv performance /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | grep -q .'
 check "gh-runner may drop caches" "sudo -n -u gh-runner sudo -n -l /usr/local/sbin/bench-ctl drop-caches"
+check "job gate wired (root-owned .env)" '
+	grep -qx "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate" /opt/actions-runner/.env &&
+	test "$(stat -c %U /opt/actions-runner/.env /usr/local/sbin/bench-job-gate | sort -u)" = root'
+check "SSH is key-only" "$SUDO sshd -T 2>/dev/null | grep -qx 'passwordauthentication no'"
 image="$(sed -n 's/^GCC_IMAGE=//p' "$ROOT/ci/bench-host/provision.sh")"
 check "toolchain image present" "sudo -n -u gh-runner -H sh -c 'cd && podman image exists $image'"
-if [[ -z $REBOOT ]] && remote "test -e $MARKER"; then
+if [[ -n $pending ]]; then
 	printf '  skip  CPU split (reboot pending)\n'
 else
 	# The runner may use exactly the bench CPUs, and sshd (system.slice) none of them.

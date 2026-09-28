@@ -17,7 +17,7 @@ push / PR / nightly
 
 | Suite | When | Takes |
 | --- | --- | --- |
-| `demo` | every push to `main`, every same-repo PR push, a fork PR when a maintainer adds the `bench` label | minutes |
+| `demo` | every push to `main`, every push to one of your own same-repo PRs | minutes |
 | `full` | nightly at 03:17 UTC if `main` moved since the last nightly; manual dispatch | hours |
 
 Only remmy's **time-ratio** (its median over GNU `rm`'s, measured in the same
@@ -49,8 +49,8 @@ the ratio cancels that. Every tool's latency and throughput are tracked too; if
      `BENCH_SMT=off` in `/etc/default/bench-tune` turns SMT off at boot);
    - registers the runner if GitHub doesn't know it, reboots if a change
      needs it (never while a job runs), and verifies the server;
-   - creates the `bench` label, requires approval for every outside
-     contributor's workflow runs, stores `BENCHER_API_KEY` as a secret, and
+   - requires approval for every outside contributor's workflow runs,
+     stores `BENCHER_API_KEY` as a secret, and
      once `bench.yml` is on `main`, dispatches a first run if there has never
      been one.
 
@@ -60,17 +60,34 @@ the ratio cancels that. Every tool's latency and throughput are tracked too; if
 
 ## Security
 
-The bench job runs a PR's code on this machine, so:
+**Only code you reviewed runs on this machine.** Never a fork's PR, and
+never anyone else's, even if you approve its workflow run.
 
-- fork PRs run only when a maintainer adds `bench`, and each push after that
-  needs the label removed and added again, after reading the new code;
-- the runner is an unprivileged user whose only root access is
-  `bench-ctl drop-caches` and `bench-ctl fstrim` (`sudoers`); builds use
-  rootless podman, never a docker group;
-- the bench workflow has a read-only token and no secrets; the Bencher key
-  lives in `bench-track.yml`, which runs from `main` on GitHub's runners and
-  trusts nothing in the artifact beyond numbers and, for non-PR runs, the
-  suite name.
+- **The gate.** `bench-job-gate` is the runner's job-started hook. It runs
+  before every job's first step, and refuses (failing the job before checkout)
+  anything that isn't this repository, on `push`, `schedule` or
+  `workflow_dispatch`, started and re-run by a trusted user, or a
+  `pull_request` from a branch of this repository by a trusted author. Trusted
+  means the repository's owner unless `mkbench.sh --trust USER` says
+  otherwise. A PR can't get around it: it brings its own `bench.yml`, but
+  the hook, its config (`/etc/remmy-bench/gate.conf`) and the runner's `.env`
+  are root-owned, and the event data comes from GitHub. `bench.yml`'s plan
+  job applies the same rule so that other runs skip instead of failing.
+- **What the gate can't stop.** Code you merged that turns out to be hostile,
+  such as a compromised dependency, runs as `gh-runner`, which owns the runner
+  and could tamper with it. So everything the machine runs is pinned: Python
+  packages by hash (`uv.lock`), uv by version, the toolchain image by
+  digest, the runner by version and SHA-256, and actions by commit.
+- **What the machine can reach.** Its jobs get a read-only token and no
+  secrets. The Bencher key lives in `bench-track.yml`, which runs from
+  `main` on GitHub's runners and reads only numbers from the artifact, plus
+  the suite name for non-PR runs. The machine writes nothing to GitHub's
+  Actions cache, and releases restore no cache, so nothing from it reaches a
+  release.
+- **The machine itself.** `gh-runner` is unprivileged. Its only root access
+  is `bench-ctl drop-caches` and `bench-ctl fstrim` (`sudoers`). Builds use
+  rootless podman, never a docker group. SSH is key-only. Protect the Vultr
+  account with 2FA: it is the machine's root of trust.
 
 ## Maintenance
 
