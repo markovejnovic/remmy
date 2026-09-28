@@ -29,6 +29,17 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_URL="${REPO_URL:-https://github.com/markovejnovic/remmy}"
+REPO="${REPO_URL#https://github.com/}"
+# Only the owner's jobs run here; see bench-job-gate.sh. Deliberately not configurable.
+OWNER="${REPO%%/*}"
+# The runner release to install, and its SHA-256 from the release notes. The
+# runner updates itself from GitHub afterwards; pinning keeps the first install
+# to a reviewed version. Bump both together.
+RUNNER_VERSION=2.337.0
+declare -A RUNNER_SHA256=(
+	[x64]=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
+	[arm64]=9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393
+)
 RUNNER_USER=gh-runner
 RUNNER_DIR=/opt/actions-runner
 RUNNER_LABELS=remmy-bench
@@ -45,6 +56,7 @@ note() { printf '    %s\n' "$*"; }
 die() { printf 'provision: %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "run as root"
+[[ $REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "bad REPO_URL '$REPO_URL'"
 grep -q 'VERSION_ID="24.04"' /etc/os-release || die "written for Ubuntu 24.04"
 
 # put MODE OWNER DEST: writes stdin to DEST only if it differs. Returns 0 when
@@ -98,7 +110,7 @@ APT=(apt-get -qq -o DPkg::Lock::Timeout=600 -o Acquire::Retries=5)
 # build-essential: tests/bench compiles mktree.cpp. podman: rootless builds in
 # the release toolchain image, so the runner never needs root or a docker group.
 packages=(build-essential bfs ca-certificates curl e2fsprogs fuse-overlayfs git hyperfine jq
-	podman python3 slirp4netns sudo tar uidmap util-linux)
+	nftables podman python3 slirp4netns sudo tar uidmap unattended-upgrades util-linux)
 if dpkg-query -W -f='${Status}\n' "${packages[@]}" 2>/dev/null | grep -qv 'install ok installed' ||
 	[[ "$(dpkg-query -W -f='${Status}\n' "${packages[@]}" 2>/dev/null | wc -l)" -ne ${#packages[@]} ]]; then
 	apt_log=/var/log/remmy-bench-apt.log
@@ -129,6 +141,45 @@ put 0755 root:root /usr/local/sbin/bench-ctl <"$HERE/bench-ctl" || true
 put 0755 root:root /usr/local/sbin/bench-tune <"$HERE/bench-tune" || true
 visudo -cf "$HERE/sudoers" >/dev/null || die "sudoers does not parse"
 put 0440 root:root /etc/sudoers.d/bench <"$HERE/sudoers" || true
+# The runner only runs hooks named *.sh, *.ps1 or *.js (a bare name fails every job).
+put 0755 root:root /usr/local/sbin/bench-job-gate.sh <"$HERE/bench-job-gate.sh" || true
+rm -f /usr/local/sbin/bench-job-gate
+put 0755 root:root /usr/local/sbin/bench-patch <"$HERE/bench-patch" || true
+printf 'REPO=%q\nOWNER=%q\n' "$REPO" "$OWNER" |
+	put 0644 root:root /etc/remmy-bench/gate.conf || true
+
+log "SSH"
+# Keys only. Vultr images allow root password logins; this file sorts before
+# cloud-init's, and sshd keeps the first value it reads.
+if ! compgen -G '/root/.ssh/authorized_keys' >/dev/null && ! compgen -G '/home/*/.ssh/authorized_keys' >/dev/null; then
+	note "no authorized_keys anywhere: leaving password logins on rather than locking you out"
+elif printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' \
+	'PermitRootLogin prohibit-password' | put 0644 root:root /etc/ssh/sshd_config.d/10-remmy-bench.conf; then
+	sshd -t || die "sshd rejects its configuration"
+	systemctl reload ssh.service 2>/dev/null || true
+	note "password logins off"
+else
+	note "keys only"
+fi
+
+log "firewall"
+# Inbound SSH only, on the port(s) sshd really listens on, so this can't lock
+# us out of a machine that moved SSH off 22.
+ssh_ports="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -un | paste -sd, -)"
+[[ $ssh_ports =~ ^[0-9]+(,[0-9]+)*$ ]] || ssh_ports=22
+fw_changed=0
+sed "s/@SSH_PORTS@/${ssh_ports//,/, }/" "$HERE/firewall.nft" |
+	put 0644 root:root /etc/remmy-bench/firewall.nft && fw_changed=1
+nft -c -f /etc/remmy-bench/firewall.nft || die "nft rejects /etc/remmy-bench/firewall.nft"
+put 0644 root:root /etc/systemd/system/remmy-bench-firewall.service <"$HERE/remmy-bench-firewall.service" &&
+	fw_changed=1 && systemctl daemon-reload
+systemctl enable --quiet remmy-bench-firewall.service
+if [[ $fw_changed == 1 ]] || ! systemctl is-active --quiet remmy-bench-firewall.service; then
+	systemctl restart remmy-bench-firewall.service
+	note "inbound: SSH ($ssh_ports) only"
+else
+	note "inbound: SSH ($ssh_ports) only (unchanged)"
+fi
 
 log "measured volume /bench"
 install -d /bench
@@ -207,6 +258,15 @@ systemctl enable --quiet bench-tune.service
 # Re-applying the tuning is harmless, and catches a knob something reset.
 systemctl restart bench-tune.service
 
+log "security updates"
+patch_changed=0
+put 0644 root:root /etc/systemd/system/bench-patch.service <"$HERE/bench-patch.service" && patch_changed=1
+put 0644 root:root /etc/systemd/system/bench-patch.timer <"$HERE/bench-patch.timer" && patch_changed=1
+[[ $patch_changed == 1 ]] && systemctl daemon-reload
+systemctl enable --quiet bench-patch.timer
+[[ $patch_changed == 1 ]] && systemctl restart bench-patch.timer
+note "daily at 15:00 UTC, between jobs: $(systemctl show -p NextElapseUSecRealtime --value bench-patch.timer)"
+
 log "CPU split"
 all_cpus="$(cat /sys/devices/system/cpu/online)"
 HOUSEKEEPING_CPUS="${HOUSEKEEPING_CPUS:-$(cat /sys/devices/system/cpu/cpu0/topology/thread_siblings_list)}"
@@ -241,26 +301,33 @@ if [[ -f $RUNNER_DIR/.runner && ${RUNNER_RESET:-} == yes ]]; then
 fi
 if [[ ! -x $RUNNER_DIR/config.sh ]]; then
 	case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; *) die "unsupported $(uname -m)" ;; esac
-	version="$(curl -fsSL --retry 5 https://api.github.com/repos/actions/runner/releases/latest | jq -r .tag_name)"
-	version="${version#v}"
-	[[ $version =~ ^[0-9.]+$ ]] || die "could not find the latest runner release"
 	install -d -o "$RUNNER_USER" -g "$RUNNER_USER" "$RUNNER_DIR"
 	curl -fsSL --retry 5 -o /tmp/actions-runner.tar.gz \
-		"https://github.com/actions/runner/releases/download/v$version/actions-runner-linux-$arch-$version.tar.gz"
+		"https://github.com/actions/runner/releases/download/v$RUNNER_VERSION/actions-runner-linux-$arch-$RUNNER_VERSION.tar.gz"
+	echo "${RUNNER_SHA256[$arch]}  /tmp/actions-runner.tar.gz" | sha256sum -c --quiet ||
+		{ rm -f /tmp/actions-runner.tar.gz; die "runner download does not match its pinned SHA-256"; }
 	sudo -u "$RUNNER_USER" tar -xzf /tmp/actions-runner.tar.gz -C "$RUNNER_DIR"
 	rm -f /tmp/actions-runner.tar.gz
-	note "installed runner $version"
+	note "installed runner $RUNNER_VERSION"
 fi
-chown -R "$RUNNER_USER:" "$RUNNER_DIR"
+# Everything but .env (root-owned below, so no job can drop the gate).
+find "$RUNNER_DIR" -path "$RUNNER_DIR/.env" -prune -o ! -user "$RUNNER_USER" -exec chown -h "$RUNNER_USER:" {} +
 if [[ ! -f $RUNNER_DIR/.runner ]]; then
 	[[ -n $token ]] || die "the runner is not configured: pass RUNNER_TOKEN_FILE or RUNNER_TOKEN"
 	if [[ -x $RUNNER_DIR/bin/installdependencies.sh ]]; then "$RUNNER_DIR/bin/installdependencies.sh" &>/dev/null; fi
-	sudo -u "$RUNNER_USER" "$RUNNER_DIR/config.sh" --unattended --replace \
+	# From its own directory: config.sh checks its libraries by relative path.
+	(cd "$RUNNER_DIR" && sudo -u "$RUNNER_USER" ./config.sh --unattended --replace \
 		--url "$REPO_URL" --token "$token" --name "$(hostname)-bench" \
-		--labels "$RUNNER_LABELS" --work "$RUNNER_HOME/work"
+		--labels "$RUNNER_LABELS" --work "$RUNNER_HOME/work")
 	runner_registered=1
 fi
 runner_changed=0
+# The runner reads .env at start. Root-owned, so no job can drop the gate.
+env_file="$RUNNER_DIR/.env"
+{
+	grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$env_file" 2>/dev/null || true
+	echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate.sh"
+} | put 0644 root:root "$env_file" && runner_changed=1
 put 0644 root:root /etc/systemd/system/gh-runner.service <<EOF && runner_changed=1
 [Unit]
 Description=GitHub Actions runner (remmy benchmarks)
@@ -272,9 +339,12 @@ User=$RUNNER_USER
 WorkingDirectory=$RUNNER_DIR
 ExecStart=$RUNNER_DIR/run.sh
 Slice=bench.slice
-KillMode=process
+# Stop everything in the unit: run.sh doesn't forward SIGTERM, so with
+# KillMode=process an old Runner.Listener outlived every restart and kept
+# taking jobs with the old configuration (no job gate).
+KillMode=control-group
 KillSignal=SIGTERM
-TimeoutStopSec=5min
+TimeoutStopSec=2min
 Restart=always
 
 [Install]
@@ -283,8 +353,14 @@ EOF
 [[ $runner_changed == 1 ]] && systemctl daemon-reload
 systemctl enable --quiet gh-runner.service
 if ! systemctl is-active --quiet gh-runner.service; then
-	systemctl start gh-runner.service
-	note "started the runner"
+	if [[ -e $REBOOT_MARKER ]]; then
+		# Started now, it would take a queued job before the pending reboot, and
+		# time it with half-applied tuning. It starts on boot instead.
+		note "the runner starts after the reboot"
+	else
+		systemctl start gh-runner.service
+		note "started the runner"
+	fi
 elif [[ $runner_changed == 1 || -n ${runner_registered:-} ]]; then
 	# Restarting mid-job would fail that job: leave it for the reboot instead.
 	if runner_busy; then
@@ -299,10 +375,10 @@ else
 fi
 
 log "toolchain image"
-if sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman image exists '$GCC_IMAGE'"; then
+if sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman --log-level=error image exists '$GCC_IMAGE'"; then
 	note "present"
 else
-	sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman pull -q '$GCC_IMAGE' >/dev/null"
+	sudo -u "$RUNNER_USER" -H bash -c "cd ~ && podman --log-level=error pull -q '$GCC_IMAGE' >/dev/null"
 	note "pulled"
 fi
 

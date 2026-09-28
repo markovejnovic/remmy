@@ -185,7 +185,9 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         if: ${{ !matrix.emulated }}
         with:
-          enable-cache: true
+          # Releases restore no caches: an entry is only as trustworthy as the
+          # least trusted job that could have saved it.
+          enable-cache: false
       - name: End-to-end tests
         if: ${{ !matrix.emulated }}
         # Fault injection interposes libc with LD_PRELOAD, which a static
@@ -268,7 +270,9 @@ jobs:
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          enable-cache: true
+          # Releases restore no caches: an entry is only as trustworthy as the
+          # least trusted job that could have saved it.
+          enable-cache: false
       - name: End-to-end tests
         # Parity's known gaps are pinned to the /bin/rm of the macOS CI runs
         # on; this runner's rm differs. CI gates parity before a tag exists.

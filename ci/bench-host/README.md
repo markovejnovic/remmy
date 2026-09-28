@@ -17,7 +17,7 @@ push / PR / nightly
 
 | Suite | When | Takes |
 | --- | --- | --- |
-| `demo` | every push to `main`, every same-repo PR push, a fork PR when a maintainer adds the `bench` label | minutes |
+| `demo` | every push to `main`, every push to one of your own same-repo PRs | minutes |
 | `full` | nightly at 03:17 UTC if `main` moved since the last nightly; manual dispatch | hours |
 
 Only remmy's **time-ratio** (its median over GNU `rm`'s, measured in the same
@@ -49,8 +49,8 @@ the ratio cancels that. Every tool's latency and throughput are tracked too; if
      `BENCH_SMT=off` in `/etc/default/bench-tune` turns SMT off at boot);
    - registers the runner if GitHub doesn't know it, reboots if a change
      needs it (never while a job runs), and verifies the server;
-   - creates the `bench` label, requires approval for every outside
-     contributor's workflow runs, stores `BENCHER_API_KEY` as a secret, and
+   - requires approval for every outside contributor's workflow runs,
+     stores `BENCHER_API_KEY` as a secret, and
      once `bench.yml` is on `main`, dispatches a first run if there has never
      been one.
 
@@ -60,25 +60,56 @@ the ratio cancels that. Every tool's latency and throughput are tracked too; if
 
 ## Security
 
-The bench job runs a PR's code on this machine, so:
+**External PRs never run on this machine.** No review, approval, label or
+re-run lets one through, because after any review a contributor could push
+new commits. Only your own code runs: pushes to `main`, the nightly, manual
+dispatches, and PRs you open from a branch of this repository and push to
+yourself.
 
-- fork PRs run only when a maintainer adds `bench`, and each push after that
-  needs the label removed and added again, after reading the new code;
-- the runner is an unprivileged user whose only root access is
-  `bench-ctl drop-caches` and `bench-ctl fstrim` (`sudoers`); builds use
-  rootless podman, never a docker group;
-- the bench workflow has a read-only token and no secrets; the Bencher key
-  lives in `bench-track.yml`, which runs from `main` on GitHub's runners and
-  trusts nothing in the artifact beyond numbers and, for non-PR runs, the
-  suite name.
+- **The gate.** `bench-job-gate.sh` is the runner's job-started hook. It runs
+  before every job's first step and fails the job, before checkout, unless:
+  the repository is this one; the job was triggered and (if re-run) re-run by
+  the owner; and it is a `push`, `schedule` or `workflow_dispatch`, or a
+  `pull_request` whose branch lives in this repository and which the owner
+  opened. The owner comes from the repository name and isn't configurable. A
+  PR can't get around it: it brings its own `bench.yml`, but the hook, its
+  config (`/etc/remmy-bench/gate.conf`) and the runner's `.env` are
+  root-owned, and the event data comes from GitHub. `bench.yml`'s plan job
+  applies the same rule so external PRs skip instead of failing.
+- **What the gate can't stop.** Code you merged that turns out to be hostile,
+  such as a compromised dependency, runs as `gh-runner`, which owns the runner
+  and could tamper with it. So everything the machine runs is pinned: Python
+  packages by hash (`uv.lock`), uv by version, the toolchain image by
+  digest, the runner by version and SHA-256, and actions by commit.
+- **What the machine can reach.** Its jobs get a read-only token and no
+  secrets. The Bencher key lives in `bench-track.yml`, which runs from
+  `main` on GitHub's runners and reads only numbers from the artifact, plus
+  the suite name for non-PR runs. The machine writes nothing to GitHub's
+  Actions cache, and releases restore no cache, so nothing from it reaches a
+  release.
+- **The machine itself.** `gh-runner` is unprivileged. Its only root access
+  is `bench-ctl drop-caches` and `bench-ctl fstrim` (`sudoers`). Builds use
+  rootless podman, never a docker group. SSH is key-only, and a firewall
+  (`firewall.nft`, its own nftables table) drops every inbound connection
+  but SSH. Security updates install daily (below). Protect the Vultr
+  account with 2FA: it is the machine's root of trust.
 
 ## Maintenance
 
-- **Updates** are off so nothing runs mid-benchmark. Patch in a quiet window:
+- **Security updates** install daily at 15:00 UTC (`bench-patch.timer`), far
+  from the 03:17 nightly. Ubuntu's own timers are masked so nothing starts
+  mid-benchmark. `bench-patch` waits up to 3 h for the runner to be idle,
+  stops it, installs security updates only, and reboots if they need it.
+  Log: `journalctl -u bench-patch`. Other updates stay manual:
   `sudo apt-get update && sudo apt-get upgrade && sudo reboot`.
-- **After changing anything that moves timings** (kernel, hardware, BIOS,
-  tuning in this directory, moving `/bench` to a disk), set `BENCHER_TESTBED` to a new name so old and
-  new numbers never share a series.
+- **After changing anything that moves timings** (hardware, BIOS, tuning in
+  this directory, moving `/bench` to a disk), set `BENCHER_TESTBED` to a new
+  name so old and new numbers never share a series. Kernel security updates
+  are routine and keep the series: the time-ratio absorbs most of their
+  effect. If a series jumps, check `journalctl -u bench-patch` for a kernel
+  update that day.
+- **Locked out of SSH?** Use the Vultr web console, then
+  `sudo systemctl stop remmy-bench-firewall` (and fix `firewall.nft`).
 - A run refuses to time on an unfit machine (`tests/bench/environment.py`: the
   governor isn't `performance`, swap in use, benchmark CPUs busy). Check
   `systemctl status bench-tune` and what else is running.
