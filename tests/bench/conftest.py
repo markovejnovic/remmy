@@ -25,7 +25,15 @@ BENCH_KEY = pytest.StashKey["BenchSession"]()
 
 def selected_plan(config: pytest.Config) -> schema.Plan | None:
     name = config.getoption("--bench")
-    return registry.plan(name, Path(config.getoption("--remmy")).resolve()) if name else None
+    if not name:
+        return None
+    baselines = {}
+    for spec in config.getoption("--bench-baseline") or ():
+        label, sep, path = spec.partition("=")
+        if not sep or not path:
+            raise pytest.UsageError(f"--bench-baseline takes NAME=PATH, not {spec!r}")
+        baselines[label] = Path(path).resolve()
+    return registry.plan(name, Path(config.getoption("--remmy")).resolve(), baselines=baselines)
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:

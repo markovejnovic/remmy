@@ -242,7 +242,7 @@ log "quiet machine"
 # Nothing may wake up mid-run. Patch by hand: sudo apt-get upgrade && sudo reboot.
 for unit in apt-daily.timer apt-daily-upgrade.timer man-db.timer fstrim.timer motd-news.timer \
 	e2scrub_all.timer dpkg-db-backup.timer fwupd-refresh.timer podman-auto-update.timer \
-	sysstat-collect.timer sysstat-summary.timer unattended-upgrades.service; do
+	sysstat-collect.timer sysstat-summary.timer unattended-upgrades.service irqbalance.service; do
 	if [[ "$(systemctl is-enabled "$unit" 2>/dev/null || true)" != masked ]]; then
 		systemctl disable --now "$unit" &>/dev/null || true
 		systemctl mask "$unit" &>/dev/null || true
@@ -283,6 +283,11 @@ for unit in system.slice user.slice init.scope; do
 done
 printf '[Unit]\nDescription=Benchmark runner and everything it starts\n\n[Slice]\nAllowedCPUs=%s\n' "$bench_cpus" |
 	put 0644 root:root /etc/systemd/system/bench.slice && split_changed=1
+# bench-tune moves hardware interrupts to the same housekeeping CPUs.
+if printf 'HOUSEKEEPING_CPUS=%s\n' "$HOUSEKEEPING_CPUS" | put 0644 root:root /etc/remmy-bench/cpus.conf; then
+	systemctl restart bench-tune.service
+	note "interrupts: CPUs $HOUSEKEEPING_CPUS"
+fi
 if [[ $split_changed == 1 ]]; then
 	systemctl daemon-reload
 	# Running processes keep their old placement until a reboot.

@@ -18,7 +18,8 @@ permissions: {}
 jobs:
   track:
     name: Track
-    if: github.event.workflow_run.conclusion == 'success'
+    # A run that failed on a regression still uploaded its results: track them.
+    if: contains(fromJSON('["success", "failure"]'), github.event.workflow_run.conclusion)
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -84,10 +85,13 @@ jobs:
           )
           if [[ -n "${PR_NUMBER:-}" ]]; then
             # Judged against main's history up to the PR's base, with main's thresholds.
-            args+=(
-              --start-point "$BASE_BRANCH" --start-point-hash "$BASE_SHA"
-              --start-point-clone-thresholds --start-point-reset --ci-number "$PR_NUMBER"
-            )
+            # A PR stacked on another branch still borrows main's: only main has any.
+            if [[ "$BASE_BRANCH" == main ]]; then
+              args+=(--start-point main --start-point-hash "$BASE_SHA")
+            else
+              args+=(--start-point main)
+            fi
+            args+=(--start-point-clone-thresholds --start-point-reset --ci-number "$PR_NUMBER")
           elif [[ "$BRANCH" == main ]]; then
             # main owns the thresholds: a ratio more than 99% likely above main's recent runs alerts.
             args+=(

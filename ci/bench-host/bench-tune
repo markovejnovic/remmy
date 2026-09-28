@@ -2,10 +2,14 @@
 # Boot-time tuning for stable timings, run by bench-tune.service. Every knob is
 # best-effort: a sysfs file a CPU or kernel lacks is skipped, not fatal.
 # /etc/default/bench-tune may set BENCH_SMT=off to also disable SMT siblings.
+# /etc/remmy-bench/cpus.conf (provision.sh) names the housekeeping CPUs.
 set -u
 BENCH_SMT=on
+HOUSEKEEPING_CPUS=""
 # shellcheck source=/dev/null
 [ -r /etc/default/bench-tune ] && . /etc/default/bench-tune
+# shellcheck source=/dev/null
+[ -r /etc/remmy-bench/cpus.conf ] && . /etc/remmy-bench/cpus.conf
 
 write() { [ -w "$2" ] && echo "$1" >"$2"; }
 
@@ -18,4 +22,19 @@ write 0 /sys/devices/system/cpu/cpufreq/boost
 [ "$BENCH_SMT" = off ] && write off /sys/devices/system/cpu/smt/control
 # A timed run must never page.
 swapoff -a
+
+# Hardware interrupts go to the housekeeping CPUs. Left alone, the disk
+# controller's interrupt sat on one benchmark CPU, preempting whatever ran there
+# on every I/O completion: remmy in some runs, not in others. Interrupts the
+# kernel manages itself (per-queue NVMe, say) refuse the write and stay put.
+if [ -n "$HOUSEKEEPING_CPUS" ]; then
+	mask=0
+	for part in $(echo "$HOUSEKEEPING_CPUS" | tr ',' ' '); do
+		for cpu in $(seq "${part%-*}" "${part#*-}"); do mask=$((mask | (1 << cpu))); done
+	done
+	write "$(printf %x "$mask")" /proc/irq/default_smp_affinity
+	for irq in /proc/irq/[0-9]*; do
+		write "$HOUSEKEEPING_CPUS" "$irq/smp_affinity_list" 2>/dev/null
+	done
+fi
 exit 0
