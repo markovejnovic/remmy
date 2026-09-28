@@ -60,19 +60,22 @@ the ratio cancels that. Every tool's latency and throughput are tracked too; if
 
 ## Security
 
-**Only code you reviewed runs on this machine.** Never a fork's PR, and
-never anyone else's, even if you approve its workflow run.
+**External PRs never run on this machine.** No review, approval, label or
+re-run lets one through, because after any review a contributor could push
+new commits. Only your own code runs: pushes to `main`, the nightly, manual
+dispatches, and PRs you open from a branch of this repository and push to
+yourself.
 
 - **The gate.** `bench-job-gate.sh` is the runner's job-started hook. It runs
-  before every job's first step, and refuses (failing the job before checkout)
-  anything that isn't this repository, on `push`, `schedule` or
-  `workflow_dispatch`, started and re-run by a trusted user, or a
-  `pull_request` from a branch of this repository by a trusted author. Trusted
-  means the repository's owner unless `mkbench.sh --trust USER` says
-  otherwise. A PR can't get around it: it brings its own `bench.yml`, but
-  the hook, its config (`/etc/remmy-bench/gate.conf`) and the runner's `.env`
-  are root-owned, and the event data comes from GitHub. `bench.yml`'s plan
-  job applies the same rule so that other runs skip instead of failing.
+  before every job's first step and fails the job, before checkout, unless:
+  the repository is this one; the job was triggered and (if re-run) re-run by
+  the owner; and it is a `push`, `schedule` or `workflow_dispatch`, or a
+  `pull_request` whose branch lives in this repository and which the owner
+  opened. The owner comes from the repository name and isn't configurable. A
+  PR can't get around it: it brings its own `bench.yml`, but the hook, its
+  config (`/etc/remmy-bench/gate.conf`) and the runner's `.env` are
+  root-owned, and the event data comes from GitHub. `bench.yml`'s plan job
+  applies the same rule so external PRs skip instead of failing.
 - **What the gate can't stop.** Code you merged that turns out to be hostile,
   such as a compromised dependency, runs as `gh-runner`, which owns the runner
   and could tamper with it. So everything the machine runs is pinned: Python

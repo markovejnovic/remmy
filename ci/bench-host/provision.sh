@@ -22,8 +22,6 @@
 # HOUSEKEEPING_CPUS CPUs left to the OS (default: cpu0 and its SMT siblings).
 #                   Every other CPU belongs to the runner and the benchmarks.
 # REPO_URL          default https://github.com/markovejnovic/remmy
-# TRUSTED_ACTORS    GitHub users whose jobs may run here (default: the
-#                   repository's owner); see bench-job-gate.sh.
 #
 # When a change needs a reboot to apply, /run/remmy-bench-reboot-required exists
 # afterwards (a reboot clears it).
@@ -32,7 +30,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_URL="${REPO_URL:-https://github.com/markovejnovic/remmy}"
 REPO="${REPO_URL#https://github.com/}"
-TRUSTED_ACTORS="${TRUSTED_ACTORS:-${REPO%%/*}}"
+# Only the owner's jobs run here; see bench-job-gate.sh. Deliberately not configurable.
+OWNER="${REPO%%/*}"
 # The runner release to install, and its SHA-256 from the release notes. The
 # runner updates itself from GitHub afterwards; pinning keeps the first install
 # to a reviewed version. Bump both together.
@@ -58,7 +57,6 @@ die() { printf 'provision: %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "run as root"
 [[ $REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "bad REPO_URL '$REPO_URL'"
-[[ $TRUSTED_ACTORS =~ ^[A-Za-z0-9-]+( [A-Za-z0-9-]+)*$ ]] || die "bad TRUSTED_ACTORS '$TRUSTED_ACTORS'"
 grep -q 'VERSION_ID="24.04"' /etc/os-release || die "written for Ubuntu 24.04"
 
 # put MODE OWNER DEST: writes stdin to DEST only if it differs. Returns 0 when
@@ -147,7 +145,7 @@ put 0440 root:root /etc/sudoers.d/bench <"$HERE/sudoers" || true
 put 0755 root:root /usr/local/sbin/bench-job-gate.sh <"$HERE/bench-job-gate.sh" || true
 rm -f /usr/local/sbin/bench-job-gate
 put 0755 root:root /usr/local/sbin/bench-patch <"$HERE/bench-patch" || true
-printf 'REPO=%q\nTRUSTED_ACTORS=%q\n' "$REPO" "$TRUSTED_ACTORS" |
+printf 'REPO=%q\nOWNER=%q\n' "$REPO" "$OWNER" |
 	put 0644 root:root /etc/remmy-bench/gate.conf || true
 
 log "SSH"

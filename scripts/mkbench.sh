@@ -16,8 +16,6 @@
 #       --format            allow erasing a DEV that holds another filesystem
 #       --housekeeping CPUS OS CPUs, e.g. 0-1 (default: cpu0 and its SMT sibling)
 #   -R, --repo OWNER/NAME   default markovejnovic/remmy
-#       --trust USER        GitHub user whose jobs may run on the server;
-#                           repeat for several (default: the repo's owner)
 #       --no-reboot         don't reboot even if a change needs it
 #       --force             reboot at once, even while the runner runs a job
 #                           (by default a needed reboot waits for the job)
@@ -26,7 +24,8 @@
 # Safe to run any number of times: it copies ci/bench-host to the server, runs
 # provision.sh (which only changes what differs), registers the runner only if
 # GitHub doesn't already know it, reboots only when a change needs it, and
-# verifies the server. Then it configures the repository: approval for every
+# verifies the server. External PRs never run there (bench-job-gate.sh). Then
+# it configures the repository: approval for every
 # outside contributor's workflow runs, the BENCHER_API_KEY
 # secret (from the environment: a user API key from bencher.dev > API Keys),
 # and a first benchmark run on main if there has never been one.
@@ -41,7 +40,6 @@ FORMAT=""
 HOUSEKEEPING=""
 REBOOT=yes
 FORCE=""
-TRUST=()
 REMOTE_DIR=.cache/remmy-bench-host
 MARKER=/run/remmy-bench-reboot-required
 
@@ -59,7 +57,6 @@ while (($#)); do
 	--format) FORMAT=yes ;;
 	--housekeeping) HOUSEKEEPING="${2:?}"; shift ;;
 	-R | --repo) REPO="${2:?}"; shift ;;
-	--trust) TRUST+=("${2:?}"); shift ;;
 	--no-reboot) REBOOT="" ;;
 	--force) FORCE=yes ;;
 	-h | --help) usage; exit 0 ;;
@@ -74,8 +71,6 @@ case ${#target[@]} in
 *) usage >&2; exit 64 ;;
 esac
 [[ $REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "bad --repo '$REPO'"
-((${#TRUST[@]})) || TRUST=("${REPO%%/*}")
-for user in "${TRUST[@]}"; do [[ $user =~ ^[A-Za-z0-9-]+$ ]] || die "bad --trust '$user'"; done
 [[ -z $HOUSEKEEPING || $HOUSEKEEPING =~ ^[0-9,-]+$ ]] || die "bad --housekeeping '$HOUSEKEEPING'"
 [[ -z $DEVICE || $DEVICE == none || $DEVICE =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || die "bad --device '$DEVICE'"
 
@@ -150,7 +145,7 @@ if [[ -n $token_needed ]]; then
 fi
 
 log "provisioning"
-env_args=("REPO_URL=https://github.com/$REPO" "TRUSTED_ACTORS='${TRUST[*]}'")
+env_args=("REPO_URL=https://github.com/$REPO")
 [[ -n $DEVICE ]] && env_args+=("BENCH_DEVICE=$DEVICE")
 [[ -n $FORMAT ]] && env_args+=(BENCH_FORMAT=yes)
 [[ -n $HOUSEKEEPING ]] && env_args+=("HOUSEKEEPING_CPUS=$HOUSEKEEPING")
@@ -164,13 +159,7 @@ remote "rm -f '$REMOTE_DIR/token'" || true
 ((status == 0)) || die "provision.sh failed (exit $status); fix the cause and run this again"
 
 log "configuring $REPO"
-# bench.yml's plan job reads the same list, to skip (not fail) other runs.
-if [[ "${TRUST[*]}" == "${REPO%%/*}" ]]; then
-	gh variable delete BENCH_TRUSTED_ACTORS -R "$REPO" &>/dev/null || true
-else
-	gh variable set BENCH_TRUSTED_ACTORS -R "$REPO" --body "${TRUST[*]}"
-fi
-echo "  ok    trusted: ${TRUST[*]}"
+echo "  ok    only ${REPO%%/*}'s own jobs run on the server; external PRs never do"
 # Fork PRs never reach the server (bench-job-gate.sh refuses them); the label that
 # once let a maintainer opt one in is gone.
 if gh label list -R "$REPO" --json name -q '.[].name' | grep -qx bench; then
