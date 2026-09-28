@@ -79,17 +79,31 @@ def _linux_tools(remmy: Path) -> tuple[Tool, ...]:
     )
 
 
+# Each id names the tree's shape and file count, and is how results are labelled everywhere: pytest ids, chart
+# files, and Bencher (demo/balanced-38k/warm/remmy@4). test_fixture_ids_match_their_trees keeps the counts honest.
+#
+# Every file is 4 KiB unless a tree says otherwise. In real node_modules trees ~80% of files are <= 4 KiB (median
+# ~1 KiB), and APFS and ext4 allocate them one 4 KiB block each, so every file frees a block like a real one does.
+SMALL = 4 << 10
 FIXTURES = (
-    Fixture(id="F0", title="Anchor", depth=3, fanout=8, files=100),
-    Fixture(id="F1", title="Shallow and wide", depth=1, fanout=512, files=100),
-    Fixture(id="F2", title="Deep and narrow", depth=9, fanout=2, files=57),
-    Fixture(id="F3", title="Small files (4 KiB)", depth=3, fanout=8, files=100, size=4096),
-    Fixture(id="F4", title="Large files (1 MiB)", depth=2, fanout=6, files=45, size=1 << 20),
-    Fixture(id="F5", title="Tiny tree", depth=1, fanout=4, files=25),
-    Fixture(id="F6", title="Huge tree", depth=3, fanout=10, files=300),
-    # F0's file count in one directory: a single scan task, no subdirs to spread.
-    Fixture(id="F7", title="Flat directory", depth=0, fanout=0, files=58_500),
+    # The anchor every other tree varies one thing of: vscode's node_modules shape, made uniform. vscode c17dab9
+    # (`npm ci --ignore-scripts`, macOS arm64, 2026-09-28) has 5,538 dirs and 39,966 files: 7.2 files per dir, 2.7
+    # subdirs per non-leaf dir, 63% leaf dirs, files a median 4 levels down. This is 5,461 dirs x 7 files.
+    Fixture(id="balanced-38k", title="Anchor", depth=6, fanout=4, files=7, size=SMALL),
+    # The anchor's dirs and files, all under one directory: many small scan tasks at one level.
+    Fixture(id="wide-38k", title="Shallow and wide", depth=1, fanout=5460, files=7, size=SMALL),
+    # An 11-level binary tree, 4,095 dirs x 9 files: long dependency chains.
+    Fixture(id="deep-36k", title="Deep and narrow", depth=11, fanout=2, files=9, size=SMALL),
+    # 43 dirs x 45 files of 1 MiB (1.9 GiB): unlink cost dominated by freeing extents.
+    Fixture(id="large-1mib-files", title="Large files (1 MiB)", depth=2, fanout=6, files=45, size=1 << 20),
+    # 5 dirs x 25 files: startup cost.
+    Fixture(id="tiny-125", title="Tiny tree", depth=1, fanout=4, files=25, size=SMALL),
+    # The anchor one level deeper, 21,845 dirs x 7 files: a monorepo's node_modules (bitwarden/clients has 124k files).
+    Fixture(id="balanced-152k", title="Huge tree", depth=7, fanout=4, files=7, size=SMALL),
+    # The anchor's file count in one directory: a single scan task, no subdirs to spread.
+    Fixture(id="flat-38k", title="Flat directory", depth=0, fanout=0, files=38_227, size=SMALL),
 )
+ANCHOR = FIXTURES[0].id
 
 
 def baseline_tool(name: str, remmy: Path) -> Tool:
@@ -113,7 +127,7 @@ def plan(name: str, remmy: Path, platform: str = sys.platform, baselines: Mappin
         return Plan(
             name="demo",
             fixtures=FIXTURES[:1],
-            caches={"F0": (Cache.WARM,)},
+            caches={ANCHOR: (Cache.WARM,)},
             tools=tuple(t for t in tools if t.name in ("rm", "xargs", "remmy")) + extra,
             threads=(1, 4),
             # 12 samples in 4 shuffled rounds: a PR is judged against main from this one run, so each cell's CI
@@ -126,7 +140,7 @@ def plan(name: str, remmy: Path, platform: str = sys.platform, baselines: Mappin
         return Plan(
             name="full",
             fixtures=FIXTURES,
-            caches={f.id: (Cache.WARM, Cache.COLD) if f.id == "F0" else (Cache.WARM,) for f in FIXTURES},
+            caches={f.id: (Cache.WARM, Cache.COLD) if f.id == ANCHOR else (Cache.WARM,) for f in FIXTURES},
             tools=tools + extra,
             threads=(1, 2, 4, 8),
             sampling={

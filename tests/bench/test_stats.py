@@ -4,6 +4,7 @@ statistics bug would silently mislabel every benchmark."""
 import json
 import math
 import random
+import re
 from pathlib import Path
 
 import numpy as np
@@ -105,7 +106,7 @@ def test_synthetic_run_recovers_planted_effects(demo_plan):
     summary = stats.summarize(schema.Run(plan=demo_plan, samples=tuple(samples)))
     verdicts = {p.tool.label: p.verdict for p in summary.pairs}
     assert verdicts["remmy@4"] is Verdict.DISTINCT
-    assert summary.pair(CellKey("F0", "remmy", 4, Cache.WARM)).time_ratio < 1
+    assert summary.pair(CellKey("balanced-38k", "remmy", 4, Cache.WARM)).time_ratio < 1
     assert verdicts["remmy@1"] is Verdict.TIE
     assert verdicts["xargs@1"] is Verdict.DISTINCT
 
@@ -151,7 +152,7 @@ def test_interval_rejects_reversed_bounds():
 
 
 def test_cell_key_labels():
-    assert str(CellKey("F0", "remmy", 4, Cache.WARM)) == "F0/warm/remmy@4"
+    assert str(CellKey("balanced-38k", "remmy", 4, Cache.WARM)) == "balanced-38k/warm/remmy@4"
 
 
 def test_bmf_carries_the_summary_bencher_tracks(demo_plan, tmp_path):
@@ -165,17 +166,17 @@ def test_bmf_carries_the_summary_bencher_tracks(demo_plan, tmp_path):
     summary = session.summary()
     doc = bmf.convert(json.loads(session.write_json(summary).read_text()))
 
-    assert set(doc) == {f"demo/F0/warm/{c.label}" for c in cells}
-    remmy = summary.pair(CellKey("F0", "remmy", 4, Cache.WARM))
-    ratio = doc["demo/F0/warm/remmy@4"]["time-ratio"]
+    assert set(doc) == {f"demo/balanced-38k/warm/{c.label}" for c in cells}
+    remmy = summary.pair(CellKey("balanced-38k", "remmy", 4, Cache.WARM))
+    ratio = doc["demo/balanced-38k/warm/remmy@4"]["time-ratio"]
     assert ratio == {"value": remmy.time_ratio, "lower_value": remmy.time_ratio_ci95.lo,
                      "upper_value": remmy.time_ratio_ci95.hi}  # fmt: skip
     # Only the subject is judged on a ratio; the reference and competitors are controls.
     assert all("time-ratio" not in m for name, m in doc.items() if "/remmy@" not in name)
-    latency = doc["demo/F0/warm/rm@1"]["latency"]
+    latency = doc["demo/balanced-38k/warm/rm@1"]["latency"]
     assert latency["lower_value"] <= latency["value"] <= latency["upper_value"]
     assert 0.5e9 < latency["value"] < 2e9  # ns
-    rate = doc["demo/F0/warm/rm@1"]["throughput"]
+    rate = doc["demo/balanced-38k/warm/rm@1"]["throughput"]
     assert rate["lower_value"] <= rate["value"] <= rate["upper_value"]
 
 
@@ -269,3 +270,16 @@ def test_versus_rule_resolves_small_shifts_at_measured_noise(slowdown, expected,
     summary = BenchSession(plan=plan, env=None, out=tmp_path, rng=random.Random(1), samples=samples).summary()
     pair = next(p for p in summary.versus if p.tool.label == "remmy@4")
     assert pair.verdict is expected
+
+
+def _count(n: int) -> str:
+    return f"{n // 1000}k" if n >= 1000 else str(n)
+
+
+@pytest.mark.parametrize("fixture", registry.FIXTURES, ids=lambda f: f.id)
+def test_fixture_ids_match_their_trees(fixture):
+    """An id is a label people read: its file count must be the tree's, and it must be safe in a path or URL."""
+    assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", fixture.id)
+    files = fixture.expected.files
+    counts = re.findall(r"(?<![a-z])(\d+k?)(?=-|$)", fixture.id)
+    assert all(c == _count(files) for c in counts if not c.endswith(("kib", "mib"))), (fixture.id, files)
