@@ -6,10 +6,12 @@ import os
 import random
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import environment
+import prepare
 import pytest
 import registry
 import runner
@@ -62,6 +64,18 @@ def bench(pytestconfig: pytest.Config, tmp_path_factory: pytest.TempPathFactory)
     env = runner.Environment(hyperfine=hyperfine, mktree=mktree, scratch=scratch)
     session = pytestconfig.stash[BENCH_KEY] = BenchSession(plan=plan, env=env, out=out, rng=random.Random(plan.seed))
     return session
+
+
+@pytest.fixture(scope="session")
+def cache_purge(request: pytest.FixtureRequest) -> None:
+    """The cold matrix evicts the fs cache before every run. macOS needs sudo for the session; the Linux bench box
+    grants exactly one command (ci/bench-host), so check that rather than asking for full root."""
+    if sys.platform != "linux":
+        request.getfixturevalue("root")
+        return
+    allowed = subprocess.run(["sudo", "-n", "-l", *prepare.PURGE[2:]], capture_output=True, check=False)
+    if allowed.returncode != 0:
+        pytest.fail(f"the cold matrix needs passwordless `sudo {' '.join(prepare.PURGE[2:])}` (ci/bench-host)")
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:

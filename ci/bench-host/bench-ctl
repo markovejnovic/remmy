@@ -1,0 +1,19 @@
+#!/bin/sh
+# The only commands the benchmark runner may run as root (see sudoers.d/bench).
+# Installed root-owned at /usr/local/sbin/bench-ctl; takes no free-form input.
+set -eu
+case "${1:-}" in
+drop-caches)
+	# The cold matrix: flush dirty pages, then evict page, dentry and inode caches.
+	sync
+	echo 3 >/proc/sys/vm/drop_caches
+	;;
+fstrim)
+	# Before a suite: hand freed blocks back to the SSD now, not in the middle of a timed run.
+	fstrim /bench
+	;;
+*)
+	echo "usage: bench-ctl drop-caches|fstrim" >&2
+	exit 64
+	;;
+esac

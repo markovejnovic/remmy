@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from schema import Cache, DecisionRule, Fixture, Plan, Sampling, Tool
@@ -18,8 +19,12 @@ def _brew(name: str) -> str:
     return shutil.which(name) or f"/opt/homebrew/bin/{name}"
 
 
-def perf_tools(remmy: Path) -> tuple[Tool, ...]:
+def perf_tools(remmy: Path, platform: str = sys.platform) -> tuple[Tool, ...]:
     """The timed competitors. Every one unlinks; none moves to a trash."""
+    return _linux_tools(remmy) if platform == "linux" else _macos_tools(remmy)
+
+
+def _macos_tools(remmy: Path) -> tuple[Tool, ...]:
     grm, bfs, r = _brew("grm"), _brew("bfs"), str(remmy)
     return (
         # BSD rm (fts): the baseline every ratio is taken against.
@@ -48,6 +53,30 @@ def perf_tools(remmy: Path) -> tuple[Tool, ...]:
     )
 
 
+def _linux_tools(remmy: Path) -> tuple[Tool, ...]:
+    """The macOS line-up on a Linux box: rm and find are GNU here, so there is no separate grm."""
+    bfs, r = shutil.which("bfs") or "/usr/bin/bfs", str(remmy)
+    return (
+        # GNU coreutils rm: the baseline every ratio is taken against.
+        Tool(name="rm", argv=("/usr/bin/rm", "-rf", "--", "{tree}"), requires=("/usr/bin/rm",)),
+        # GNU find, depth-first.
+        Tool(name="find", argv=("/usr/bin/find", "{tree}", "-depth", "-delete"), requires=("/usr/bin/find",)),
+        Tool(name="bfs", argv=(bfs, "{tree}", "-delete"), requires=(bfs,)),
+        Tool(
+            name="xargs",
+            argv=(
+                (
+                    "/usr/bin/find {tree} -depth ! -type d -print0 | /usr/bin/xargs -0 -P{threads} -n256 /usr/bin/rm -f"
+                    " ; /usr/bin/find {tree} -depth -type d -delete"
+                ),
+            ),
+            shell=True,
+            requires=("/usr/bin/find", "/usr/bin/xargs", "/usr/bin/rm"),
+        ),
+        Tool(name="remmy", argv=(r, "-r", "{tree}"), env={"REMMY_THREADS": "{threads}"}, requires=(r,)),
+    )
+
+
 FIXTURES = (
     Fixture(id="F0", title="Anchor", depth=3, fanout=8, files=100),
     Fixture(id="F1", title="Shallow and wide", depth=1, fanout=512, files=100),
@@ -61,9 +90,9 @@ FIXTURES = (
 )
 
 
-def plan(name: str, remmy: Path) -> Plan:
+def plan(name: str, remmy: Path, platform: str = sys.platform) -> Plan:
     """``demo`` (minutes, warm only) or ``full`` (hours)."""
-    tools = perf_tools(remmy)
+    tools = perf_tools(remmy, platform)
     common = {"reference": "rm", "rule": DecisionRule(), "seed": SEED}
     if name == "demo":
         return Plan(

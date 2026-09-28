@@ -1,7 +1,8 @@
 """hyperfine --prepare hook, run outside the timer: prepare.py MKTREE TREE STATE [--purge] -- MKTREE_ARGS...
 
 Builds TREE, syncs, waits until the volume's free space stops moving (so the build's writeback can't bleed into the
-timed delete), writes the tree's counts to STATE, and with --purge evicts the fs cache (`sudo -n purge`). Any failure
+timed delete), writes the tree's counts to STATE, and with --purge evicts the fs cache (`sudo -n purge` on macOS,
+`sudo -n bench-ctl drop-caches` on Linux; see ci/bench-host). Any failure
 exits non-zero, aborting hyperfine; since hyperfine hides this hook's stderr, the reason also goes to prepare.err.
 """
 
@@ -12,6 +13,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+PURGE = (
+    ["sudo", "-n", "/usr/local/sbin/bench-ctl", "drop-caches"]
+    if sys.platform == "linux"
+    else ["sudo", "-n", "/usr/sbin/purge"]
+)
 
 
 def free_bytes(path: Path) -> int:
@@ -59,7 +66,7 @@ def main() -> int:
     state.write_text(json.dumps({"dirs": int(dirs), "files": int(files)}))
 
     if purge:
-        purged = subprocess.run(["sudo", "-n", "/usr/sbin/purge"], capture_output=True, text=True, check=False)
+        purged = subprocess.run(PURGE, capture_output=True, text=True, check=False)
         if purged.returncode != 0:
             return fail(f"purge failed (is sudo authorized?): {purged.stderr.strip()}")
     return 0

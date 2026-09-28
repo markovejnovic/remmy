@@ -1,0 +1,143 @@
+name: Bench
+
+# Times the release binary on the dedicated bare-metal runner (ci/bench-host).
+# demo (minutes) runs on every push to main and every same-repo PR; a fork's PR
+# runs it only when a maintainer adds the `bench` label, once per labelling,
+# because the job executes the PR's code on our machine. full (hours) runs
+# nightly when main has moved. This workflow holds no secrets: bench-track.yml
+# uploads the results to Bencher once a run finishes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: demo (minutes) or full (hours)
+        type: choice
+        options: [demo, full]
+        default: demo
+
+permissions:
+  contents: read
+
+env:
+  # Keep in sync with release.yml: benchmarks time the binary users download.
+  # Fully qualified: podman, unlike docker, has no default registry.
+  GCC_IMAGE: docker.io/library/gcc:16.2.0-trixie@sha256:ef558a40d1f13115293feee01526dbdb9aaad7c9c5a00da05f471ce042e855c1
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      suite: ${{ steps.plan.outputs.suite }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          SHA: ${{ github.sha }}
+          INPUT_SUITE: ${{ inputs.suite }}
+        run: |
+          run=false suite=demo
+          case "$EVENT" in
+            pull_request)
+              if [[ "$HEAD_REPO" == "$REPO" ]]; then
+                # Labelling a same-repo PR would only repeat its last run.
+                [[ "$ACTION" != labeled ]] && run=true
+              elif [[ "$ACTION" == labeled && "$LABEL" == bench ]]; then
+                run=true
+              fi
+              ;;
+            push) run=true ;;
+            schedule)
+              suite=full
+              last="$(gh run list -R "$REPO" -w bench.yml -e schedule -s success -L 1 --json headSha -q '.[0].headSha // ""')"
+              if [[ "$last" == "$SHA" ]]; then
+                echo "main is still at the last nightly's commit ${SHA::12}: skipping"
+              else
+                run=true
+              fi
+              ;;
+            workflow_dispatch) run=true suite="$INPUT_SUITE" ;;
+          esac
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "suite=$suite" >> "$GITHUB_OUTPUT"
+
+  bench:
+    name: Bench (${{ needs.plan.outputs.suite }})
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    runs-on: [self-hosted, linux, remmy-bench]
+    timeout-minutes: ${{ needs.plan.outputs.suite == 'full' && 720 || 60 }}
+    # One runner serves every job, so they queue on it anyway. A newer push to a
+    # PR supersedes its running demo; main and nightly runs always finish.
+    concurrency:
+      group: bench-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    env:
+      SUITE: ${{ needs.plan.outputs.suite }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A cancelled run can leave trees behind on the measured volume.
+      - name: Clear /bench
+        run: find /bench -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} +
+
+      # Rootless podman: files the container's root writes belong to the runner.
+      - name: Build (static release, as shipped)
+        run: |
+          podman run --rm -v "$PWD:/src" -w /src "$GCC_IMAGE" \
+            bash -euxo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -o Acquire::Retries=5 update -qq
+              apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends cmake ninja-build
+              cmake --preset dist -DCMAKE_CXX_COMPILER=g++
+              cmake --build --preset dist
+              strip build/gcc-dist/remmy
+            '
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+
+      - name: Trim /bench
+        run: sudo -n /usr/local/sbin/bench-ctl fstrim
+
+      - name: Benchmark
+        run: >
+          uv run --locked pytest tests/bench/test_benchmark.py -p no:xdist -p no:cacheprovider
+          --bench="$SUITE"
+          --remmy "$GITHUB_WORKSPACE/build/gcc-dist/remmy"
+          --bench-scratch /bench
+          --bench-out "$RUNNER_TEMP/bench"
+
+      - name: Convert for Bencher
+        env:
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          uv run --locked python tests/bench/bmf.py "$RUNNER_TEMP/bench/run.json" > "$RUNNER_TEMP/bench/bmf.json"
+          jq -n --arg suite "$SUITE" --arg event "$EVENT" --arg sha "$SHA" \
+            '{suite: $suite, event: $event, sha: $sha}' > "$RUNNER_TEMP/bench/meta.json"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-results
+          path: ${{ runner.temp }}/bench
+          retention-days: 90
+          if-no-files-found: error

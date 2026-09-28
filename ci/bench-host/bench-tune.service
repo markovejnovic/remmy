@@ -1,0 +1,11 @@
+[Unit]
+Description=Tune the machine for stable benchmark timings
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bench-tune
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
