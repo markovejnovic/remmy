@@ -180,7 +180,8 @@ def _speedup_by_fixture(theme: Theme, run: Run, summary: Summary):
     default = 4 if 4 in run.plan.threads else max(run.plan.threads)
     shown = [p for p in summary.pairs if p.tool.threads == default or not _swept(run, p.tool.tool)]
     pairs = [p for p in shown if p.tool.cache == "warm"]
-    fixtures = sorted({p.tool.fixture for p in pairs}, key=lambda f: int(f[1:]))
+    present = {p.tool.fixture for p in pairs}
+    fixtures = [f.id for f in run.plan.fixtures if f.id in present]  # the registry's order
     tools = sorted({p.tool.tool for p in pairs}, key=lambda t: (t != HIGHLIGHT, not _swept(run, t), t))
     rest = iter(theme.rest)
     width = min(0.8 / len(tools), 0.17)
