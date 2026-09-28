@@ -106,7 +106,7 @@ def test_synthetic_run_recovers_planted_effects(demo_plan):
     summary = stats.summarize(schema.Run(plan=demo_plan, samples=tuple(samples)))
     verdicts = {p.tool.label: p.verdict for p in summary.pairs}
     assert verdicts["remmy@4"] is Verdict.DISTINCT
-    assert summary.pair(CellKey("balanced-58k", "remmy", 4, Cache.WARM)).time_ratio < 1
+    assert summary.pair(CellKey("balanced-38k", "remmy", 4, Cache.WARM)).time_ratio < 1
     assert verdicts["remmy@1"] is Verdict.TIE
     assert verdicts["xargs@1"] is Verdict.DISTINCT
 
@@ -152,7 +152,7 @@ def test_interval_rejects_reversed_bounds():
 
 
 def test_cell_key_labels():
-    assert str(CellKey("balanced-58k", "remmy", 4, Cache.WARM)) == "balanced-58k/warm/remmy@4"
+    assert str(CellKey("balanced-38k", "remmy", 4, Cache.WARM)) == "balanced-38k/warm/remmy@4"
 
 
 def test_bmf_carries_the_summary_bencher_tracks(demo_plan, tmp_path):
@@ -166,17 +166,17 @@ def test_bmf_carries_the_summary_bencher_tracks(demo_plan, tmp_path):
     summary = session.summary()
     doc = bmf.convert(json.loads(session.write_json(summary).read_text()))
 
-    assert set(doc) == {f"demo/balanced-58k/warm/{c.label}" for c in cells}
-    remmy = summary.pair(CellKey("balanced-58k", "remmy", 4, Cache.WARM))
-    ratio = doc["demo/balanced-58k/warm/remmy@4"]["time-ratio"]
+    assert set(doc) == {f"demo/balanced-38k/warm/{c.label}" for c in cells}
+    remmy = summary.pair(CellKey("balanced-38k", "remmy", 4, Cache.WARM))
+    ratio = doc["demo/balanced-38k/warm/remmy@4"]["time-ratio"]
     assert ratio == {"value": remmy.time_ratio, "lower_value": remmy.time_ratio_ci95.lo,
                      "upper_value": remmy.time_ratio_ci95.hi}  # fmt: skip
     # Only the subject is judged on a ratio; the reference and competitors are controls.
     assert all("time-ratio" not in m for name, m in doc.items() if "/remmy@" not in name)
-    latency = doc["demo/balanced-58k/warm/rm@1"]["latency"]
+    latency = doc["demo/balanced-38k/warm/rm@1"]["latency"]
     assert latency["lower_value"] <= latency["value"] <= latency["upper_value"]
     assert 0.5e9 < latency["value"] < 2e9  # ns
-    rate = doc["demo/balanced-58k/warm/rm@1"]["throughput"]
+    rate = doc["demo/balanced-38k/warm/rm@1"]["throughput"]
     assert rate["lower_value"] <= rate["value"] <= rate["upper_value"]
 
 

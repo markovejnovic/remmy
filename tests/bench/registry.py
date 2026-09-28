@@ -78,24 +78,28 @@ def _linux_tools(remmy: Path) -> tuple[Tool, ...]:
 
 
 # Each id names the tree's shape and file count, and is how results are labelled everywhere: pytest ids, chart
-# files, and Bencher (demo/balanced-58k/warm/remmy@4). test_fixture_ids_match_their_trees keeps the counts honest.
+# files, and Bencher (demo/balanced-38k/warm/remmy@4). test_fixture_ids_match_their_trees keeps the counts honest.
+#
+# Every file is 4 KiB unless a tree says otherwise. In real node_modules trees ~80% of files are <= 4 KiB (median
+# ~1 KiB), and APFS and ext4 allocate them one 4 KiB block each, so every file frees a block like a real one does.
+SMALL = 4 << 10
 FIXTURES = (
-    # 585 dirs (8 subdirs per dir, 3 levels) x 100 empty files: the anchor every other tree varies one thing of.
-    Fixture(id="balanced-58k", title="Anchor", depth=3, fanout=8, files=100),
-    # 512 sibling dirs x 100 files: many small scan tasks at one level.
-    Fixture(id="wide-51k", title="Shallow and wide", depth=1, fanout=512, files=100),
-    # A 9-level binary tree, 1,023 dirs x 57 files: long dependency chains.
-    Fixture(id="deep-58k", title="Deep and narrow", depth=9, fanout=2, files=57),
-    # The anchor with 4 KiB files: freeing data blocks, not just inodes.
-    Fixture(id="balanced-58k-4kib", title="Small files (4 KiB)", depth=3, fanout=8, files=100, size=4096),
+    # The anchor every other tree varies one thing of: vscode's node_modules shape, made uniform. vscode c17dab9
+    # (`npm ci --ignore-scripts`, macOS arm64, 2026-09-28) has 5,538 dirs and 39,966 files: 7.2 files per dir, 2.7
+    # subdirs per non-leaf dir, 63% leaf dirs, files a median 4 levels down. This is 5,461 dirs x 7 files.
+    Fixture(id="balanced-38k", title="Anchor", depth=6, fanout=4, files=7, size=SMALL),
+    # The anchor's dirs and files, all under one directory: many small scan tasks at one level.
+    Fixture(id="wide-38k", title="Shallow and wide", depth=1, fanout=5460, files=7, size=SMALL),
+    # An 11-level binary tree, 4,095 dirs x 9 files: long dependency chains.
+    Fixture(id="deep-36k", title="Deep and narrow", depth=11, fanout=2, files=9, size=SMALL),
     # 43 dirs x 45 files of 1 MiB (1.9 GiB): unlink cost dominated by freeing extents.
     Fixture(id="large-1mib-files", title="Large files (1 MiB)", depth=2, fanout=6, files=45, size=1 << 20),
     # 5 dirs x 25 files: startup cost.
-    Fixture(id="tiny-125", title="Tiny tree", depth=1, fanout=4, files=25),
-    # 1,111 dirs (10 per dir, 3 levels) x 300 files.
-    Fixture(id="balanced-333k", title="Huge tree", depth=3, fanout=10, files=300),
+    Fixture(id="tiny-125", title="Tiny tree", depth=1, fanout=4, files=25, size=SMALL),
+    # The anchor one level deeper, 21,845 dirs x 7 files: a monorepo's node_modules (bitwarden/clients has 124k files).
+    Fixture(id="balanced-152k", title="Huge tree", depth=7, fanout=4, files=7, size=SMALL),
     # The anchor's file count in one directory: a single scan task, no subdirs to spread.
-    Fixture(id="flat-58k", title="Flat directory", depth=0, fanout=0, files=58_500),
+    Fixture(id="flat-38k", title="Flat directory", depth=0, fanout=0, files=38_227, size=SMALL),
 )
 ANCHOR = FIXTURES[0].id
 
