@@ -86,16 +86,27 @@ never anyone else's, even if you approve its workflow run.
   release.
 - **The machine itself.** `gh-runner` is unprivileged. Its only root access
   is `bench-ctl drop-caches` and `bench-ctl fstrim` (`sudoers`). Builds use
-  rootless podman, never a docker group. SSH is key-only. Protect the Vultr
+  rootless podman, never a docker group. SSH is key-only, and a firewall
+  (`firewall.nft`, its own nftables table) drops every inbound connection
+  but SSH. Security updates install daily (below). Protect the Vultr
   account with 2FA: it is the machine's root of trust.
 
 ## Maintenance
 
-- **Updates** are off so nothing runs mid-benchmark. Patch in a quiet window:
+- **Security updates** install daily at 15:00 UTC (`bench-patch.timer`), far
+  from the 03:17 nightly. Ubuntu's own timers are masked so nothing starts
+  mid-benchmark. `bench-patch` waits up to 3 h for the runner to be idle,
+  stops it, installs security updates only, and reboots if they need it.
+  Log: `journalctl -u bench-patch`. Other updates stay manual:
   `sudo apt-get update && sudo apt-get upgrade && sudo reboot`.
-- **After changing anything that moves timings** (kernel, hardware, BIOS,
-  tuning in this directory, moving `/bench` to a disk), set `BENCHER_TESTBED` to a new name so old and
-  new numbers never share a series.
+- **After changing anything that moves timings** (hardware, BIOS, tuning in
+  this directory, moving `/bench` to a disk), set `BENCHER_TESTBED` to a new
+  name so old and new numbers never share a series. Kernel security updates
+  are routine and keep the series: the time-ratio absorbs most of their
+  effect. If a series jumps, check `journalctl -u bench-patch` for a kernel
+  update that day.
+- **Locked out of SSH?** Use the Vultr web console, then
+  `sudo systemctl stop remmy-bench-firewall` (and fix `firewall.nft`).
 - A run refuses to time on an unfit machine (`tests/bench/environment.py`: the
   governor isn't `performance`, swap in use, benchmark CPUs busy). Check
   `systemctl status bench-tune` and what else is running.

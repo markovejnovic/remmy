@@ -252,6 +252,15 @@ check "job gate wired (root-owned .env)" '
 	grep -qx "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate" /opt/actions-runner/.env &&
 	test "$(stat -c %U /opt/actions-runner/.env /usr/local/sbin/bench-job-gate | sort -u)" = root'
 check "SSH is key-only" "$SUDO sshd -T 2>/dev/null | grep -qx 'passwordauthentication no'"
+check "firewall loaded (inbound SSH only)" "$SUDO nft list table inet remmy_bench"
+check "security updates scheduled" 'systemctl is-enabled --quiet bench-patch.timer && systemctl is-active --quiet bench-patch.timer'
+# Through a new connection: the shared one would survive a firewall lockout.
+if "${SSH[@]}" -o ControlPath=none -o BatchMode=yes "$DEST" true &>/dev/null; then
+	printf '  ok    a new SSH connection gets in\n'
+else
+	printf '  FAIL  a new SSH connection is refused: fix it from the Vultr web console\n'
+	fail=1
+fi
 image="$(sed -n 's/^GCC_IMAGE=//p' "$ROOT/ci/bench-host/provision.sh")"
 check "toolchain image present" "sudo -n -u gh-runner -H sh -c 'cd && podman image exists $image'"
 if [[ -n $pending ]]; then

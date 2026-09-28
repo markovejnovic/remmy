@@ -1,0 +1,9 @@
+[Unit]
+Description=Security updates for the benchmark machine, between jobs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bench-patch
+TimeoutStartSec=5h

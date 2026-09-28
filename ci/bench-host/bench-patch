@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Daily security updates, run by bench-patch.timer at 15:00 UTC, far from the
+# 03:17 UTC nightly. Automatic apt timers are masked because they would fire in
+# the middle of a timed run; this is their replacement, on our schedule.
+#
+# Waits (up to 3 h) for the runner to be idle, then stops it so no job starts
+# mid-update, installs security updates only (unattended-upgrade, whose stock
+# Ubuntu config allows just the -security pockets), and reboots if they need
+# it. Otherwise it re-applies the tuning and starts the runner again.
+set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+log() { echo "bench-patch: $*"; }
+busy() { pgrep -u gh-runner -f Runner.Worker >/dev/null; }
+
+deadline=$((SECONDS + 3 * 3600))
+while busy; do
+	if ((SECONDS >= deadline)); then
+		log "the runner has been busy for 3 h: skipping today"
+		exit 0
+	fi
+	sleep 60
+done
+systemctl stop gh-runner.service
+trap 'systemctl start gh-runner.service' EXIT
+
+status=0
+apt-get -qq -o DPkg::Lock::Timeout=600 -o Acquire::Retries=5 update || status=$?
+unattended-upgrade -v || status=$?
+
+if [[ -e /var/run/reboot-required ]]; then
+	log "rebooting for: $(paste -sd' ' /var/run/reboot-required.pkgs 2>/dev/null)"
+	trap - EXIT # the runner starts on boot
+	systemctl reboot
+	exit 0
+fi
+systemctl restart bench-tune.service
+log "done (exit $status)"
+exit "$status"

@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily security updates, away from the 03:17 UTC nightly benchmark
+
+[Timer]
+OnCalendar=*-*-* 15:00:00 UTC
+Persistent=false
+
+[Install]
+WantedBy=timers.target

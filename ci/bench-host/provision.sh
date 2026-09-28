@@ -112,7 +112,7 @@ APT=(apt-get -qq -o DPkg::Lock::Timeout=600 -o Acquire::Retries=5)
 # build-essential: tests/bench compiles mktree.cpp. podman: rootless builds in
 # the release toolchain image, so the runner never needs root or a docker group.
 packages=(build-essential bfs ca-certificates curl e2fsprogs fuse-overlayfs git hyperfine jq
-	podman python3 slirp4netns sudo tar uidmap util-linux)
+	nftables podman python3 slirp4netns sudo tar uidmap unattended-upgrades util-linux)
 if dpkg-query -W -f='${Status}\n' "${packages[@]}" 2>/dev/null | grep -qv 'install ok installed' ||
 	[[ "$(dpkg-query -W -f='${Status}\n' "${packages[@]}" 2>/dev/null | wc -l)" -ne ${#packages[@]} ]]; then
 	apt_log=/var/log/remmy-bench-apt.log
@@ -144,6 +144,7 @@ put 0755 root:root /usr/local/sbin/bench-tune <"$HERE/bench-tune" || true
 visudo -cf "$HERE/sudoers" >/dev/null || die "sudoers does not parse"
 put 0440 root:root /etc/sudoers.d/bench <"$HERE/sudoers" || true
 put 0755 root:root /usr/local/sbin/bench-job-gate <"$HERE/bench-job-gate" || true
+put 0755 root:root /usr/local/sbin/bench-patch <"$HERE/bench-patch" || true
 printf 'REPO=%q\nTRUSTED_ACTORS=%q\n' "$REPO" "$TRUSTED_ACTORS" |
 	put 0644 root:root /etc/remmy-bench/gate.conf || true
 
@@ -159,6 +160,25 @@ elif printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no'
 	note "password logins off"
 else
 	note "keys only"
+fi
+
+log "firewall"
+# Inbound SSH only, on the port(s) sshd really listens on, so this can't lock
+# us out of a machine that moved SSH off 22.
+ssh_ports="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -un | paste -sd, -)"
+[[ $ssh_ports =~ ^[0-9]+(,[0-9]+)*$ ]] || ssh_ports=22
+fw_changed=0
+sed "s/@SSH_PORTS@/${ssh_ports//,/, }/" "$HERE/firewall.nft" |
+	put 0644 root:root /etc/remmy-bench/firewall.nft && fw_changed=1
+nft -c -f /etc/remmy-bench/firewall.nft || die "nft rejects /etc/remmy-bench/firewall.nft"
+put 0644 root:root /etc/systemd/system/remmy-bench-firewall.service <"$HERE/remmy-bench-firewall.service" &&
+	fw_changed=1 && systemctl daemon-reload
+systemctl enable --quiet remmy-bench-firewall.service
+if [[ $fw_changed == 1 ]] || ! systemctl is-active --quiet remmy-bench-firewall.service; then
+	systemctl restart remmy-bench-firewall.service
+	note "inbound: SSH ($ssh_ports) only"
+else
+	note "inbound: SSH ($ssh_ports) only (unchanged)"
 fi
 
 log "measured volume /bench"
@@ -237,6 +257,15 @@ put 0644 root:root /etc/systemd/system/bench-tune.service <"$HERE/bench-tune.ser
 systemctl enable --quiet bench-tune.service
 # Re-applying the tuning is harmless, and catches a knob something reset.
 systemctl restart bench-tune.service
+
+log "security updates"
+patch_changed=0
+put 0644 root:root /etc/systemd/system/bench-patch.service <"$HERE/bench-patch.service" && patch_changed=1
+put 0644 root:root /etc/systemd/system/bench-patch.timer <"$HERE/bench-patch.timer" && patch_changed=1
+[[ $patch_changed == 1 ]] && systemctl daemon-reload
+systemctl enable --quiet bench-patch.timer
+[[ $patch_changed == 1 ]] && systemctl restart bench-patch.timer
+note "daily at 15:00 UTC, between jobs: $(systemctl show -p NextElapseUSecRealtime --value bench-patch.timer)"
 
 log "CPU split"
 all_cpus="$(cat /sys/devices/system/cpu/online)"

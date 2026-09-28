@@ -1,0 +1,24 @@
+#!/usr/sbin/nft -f
+# Inbound: SSH only, plus replies to our own traffic, ICMP (path MTU discovery,
+# IPv6 neighbour discovery) and DHCP leases. Outbound is open: the runner needs
+# GitHub, the container registry, PyPI and the Ubuntu mirrors.
+#
+# Its own table, replaced atomically on load: other tables (ufw's, say) stay.
+# provision.sh fills in @SSH_PORTS@ from `sshd -T`.
+table inet remmy_bench {}
+delete table inet remmy_bench
+table inet remmy_bench {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif lo accept
+		ct state established,related accept
+		ct state invalid drop
+		meta l4proto { icmp, ipv6-icmp } accept
+		udp sport 67 udp dport 68 accept
+		udp sport 547 udp dport 546 accept
+		tcp dport { @SSH_PORTS@ } accept
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+	}
+}
