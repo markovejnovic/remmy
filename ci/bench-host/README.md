@@ -27,33 +27,36 @@ the ratio cancels that. Every tool's latency and throughput are tracked too; if
 
 ## Setting up
 
-1. **Machine.** Ubuntu 24.04 bare metal, ideally with a second NVMe drive for
-   `/bench` (the measured volume); otherwise leave a spare partition when
-   installing. Don't use it for anything else.
-2. **Runner token.** Repository Settings → Actions → Runners → New
-   self-hosted runner; copy the token from the `config.sh` line (valid 1 h).
-3. **Provision** (as root, from a checkout of this repository):
+1. **Machine.** Ubuntu 24.04 bare metal that does nothing else. A spare,
+   empty NVMe drive for `/bench` (the measured volume) gives the steadiest
+   timings; without one, `/bench` is a directory on the root filesystem.
+2. **Bencher key** (optional now, needed for tracking): sign in to
+   [bencher.dev](https://bencher.dev) with GitHub and create a user API key.
+   The project is created on the first upload.
+3. **Run**, from a checkout, with `gh` logged in as a repository admin:
    ```bash
-   sudo BENCH_DEVICE=/dev/nvme1n1 RUNNER_TOKEN=<token> ci/bench-host/provision.sh
-   sudo reboot
+   BENCHER_API_KEY=<key> scripts/mkbench.sh root@<ip>
    ```
-   It formats `BENCH_DEVICE` as ext4 on `/bench` (refusing one that holds a
-   filesystem unless `BENCH_FORMAT=yes`), creates the unprivileged `gh-runner`
-   user, installs the runner as `gh-runner.service`, and tunes the machine:
-   `performance` governor, turbo off, swap off, update timers masked,
-   housekeeping on cpu0 (and its SMT sibling) with every other CPU reserved
-   for the runner's `bench.slice`. `HOUSEKEEPING_CPUS=0-1` widens that;
-   `BENCH_SMT=off` in `/etc/default/bench-tune` turns SMT off at boot.
-4. **Bencher.** Sign in to [bencher.dev](https://bencher.dev) with GitHub,
-   create a public project, and create a project API key. In the repository:
-   - secret `BENCHER_API_KEY`: the key
-   - variable `BENCHER_PROJECT`: the project slug, if it isn't `remmy`
-   - variable `BENCHER_TESTBED`: optional, default `vultr-bare-metal`
-5. **GitHub.** Settings → Actions → General → *Require approval for all
-   external contributors*. Create the label: `gh label create bench`.
-6. **Seed the baseline.** Actions → Bench → Run workflow, once with `demo`
-   and once with `full`. A PR's comparison needs a few `main` runs before the
-   t-test has a history to judge against.
+   That's all. Connect as root or a user with passwordless sudo. The script:
+   - copies this directory to the server and runs `provision.sh`, which picks
+     `/bench` (a blank disk, meaning no filesystem, partitions, RAID or LVM, so
+     formatting it loses nothing; else a directory on the root filesystem;
+     `--device DEV` or `--no-device` to choose), creates the unprivileged
+     `gh-runner` user, installs the runner, and tunes the machine:
+     `performance` governor, turbo off, swap off, update timers masked,
+     housekeeping on cpu0 (and its SMT sibling) with every other CPU in the
+     runner's `bench.slice` (`--housekeeping 0-1` widens that;
+     `BENCH_SMT=off` in `/etc/default/bench-tune` turns SMT off at boot);
+   - registers the runner if GitHub doesn't know it, reboots if a change
+     needs it (never while a job runs), and verifies the server;
+   - creates the `bench` label, requires approval for every outside
+     contributor's workflow runs, stores `BENCHER_API_KEY` as a secret, and
+     once `bench.yml` is on `main`, dispatches a first run if there has never
+     been one.
+
+   Run it again any time (after merging, after editing this directory, after
+   a reboot): every step changes only what differs, and a runner is never
+   restarted mid-job. `scripts/mkbench.sh --help` lists the options.
 
 ## Security
 
@@ -74,7 +77,7 @@ The bench job runs a PR's code on this machine, so:
 - **Updates** are off so nothing runs mid-benchmark. Patch in a quiet window:
   `sudo apt-get update && sudo apt-get upgrade && sudo reboot`.
 - **After changing anything that moves timings** (kernel, hardware, BIOS,
-  tuning in this directory), set `BENCHER_TESTBED` to a new name so old and
+  tuning in this directory, moving `/bench` to a disk), set `BENCHER_TESTBED` to a new name so old and
   new numbers never share a series.
 - A run refuses to time on an unfit machine (`tests/bench/environment.py`: the
   governor isn't `performance`, swap in use, benchmark CPUs busy). Check

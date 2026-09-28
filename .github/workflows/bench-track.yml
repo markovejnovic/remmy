@@ -70,7 +70,8 @@ jobs:
         if: steps.results.outputs.found
         env:
           BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
-          BENCHER_PROJECT: ${{ vars.BENCHER_PROJECT || 'remmy' }}
+          # Created on the first upload (--ci-on-the-fly) if it doesn't exist.
+          BENCHER_PROJECT: ${{ vars.BENCHER_PROJECT || format('{0}-remmy', github.repository_owner) }}
           BENCHER_TESTBED: ${{ vars.BENCHER_TESTBED || 'vultr-bare-metal' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -78,7 +79,7 @@ jobs:
             --project "$BENCHER_PROJECT" --key "$BENCHER_API_KEY" --testbed "$BENCHER_TESTBED"
             --branch "$BRANCH" --hash "$HEAD_SHA"
             --adapter json --file results/bmf.json
-            --github-actions "$GITHUB_TOKEN" --error-on-alert
+            --github-actions "$GITHUB_TOKEN" --error-on-alert --ci-on-the-fly
           )
           if [[ -n "${PR_NUMBER:-}" ]]; then
             # Judged against main's history up to the PR's base, with main's thresholds.

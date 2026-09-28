@@ -26,7 +26,8 @@ permissions:
 
 env:
   # Keep in sync with release.yml: benchmarks time the binary users download.
-  GCC_IMAGE: gcc:16.2.0-trixie@sha256:ef558a40d1f13115293feee01526dbdb9aaad7c9c5a00da05f471ce042e855c1
+  # Fully qualified: podman, unlike docker, has no default registry.
+  GCC_IMAGE: docker.io/library/gcc:16.2.0-trixie@sha256:ef558a40d1f13115293feee01526dbdb9aaad7c9c5a00da05f471ce042e855c1
 
 jobs:
   plan:
