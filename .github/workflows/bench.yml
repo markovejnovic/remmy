@@ -131,7 +131,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          # The runner keeps this checkout between jobs but empties $RUNNER_TEMP,
+          # so an earlier run's worktree is still registered, with its directory gone.
+          git worktree prune
+          git worktree add --force --detach "$RUNNER_TEMP/base" "$BASE_SHA"
       - name: Build main at the PR's base
         if: github.event_name == 'pull_request'
         working-directory: ${{ runner.temp }}/base
