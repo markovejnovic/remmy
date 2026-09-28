@@ -23,7 +23,7 @@
 #                   Every other CPU belongs to the runner and the benchmarks.
 # REPO_URL          default https://github.com/markovejnovic/remmy
 # TRUSTED_ACTORS    GitHub users whose jobs may run here (default: the
-#                   repository's owner); see bench-job-gate.
+#                   repository's owner); see bench-job-gate.sh.
 #
 # When a change needs a reboot to apply, /run/remmy-bench-reboot-required exists
 # afterwards (a reboot clears it).
@@ -143,7 +143,9 @@ put 0755 root:root /usr/local/sbin/bench-ctl <"$HERE/bench-ctl" || true
 put 0755 root:root /usr/local/sbin/bench-tune <"$HERE/bench-tune" || true
 visudo -cf "$HERE/sudoers" >/dev/null || die "sudoers does not parse"
 put 0440 root:root /etc/sudoers.d/bench <"$HERE/sudoers" || true
-put 0755 root:root /usr/local/sbin/bench-job-gate <"$HERE/bench-job-gate" || true
+# The runner only runs hooks named *.sh, *.ps1 or *.js (a bare name fails every job).
+put 0755 root:root /usr/local/sbin/bench-job-gate.sh <"$HERE/bench-job-gate.sh" || true
+rm -f /usr/local/sbin/bench-job-gate
 put 0755 root:root /usr/local/sbin/bench-patch <"$HERE/bench-patch" || true
 printf 'REPO=%q\nTRUSTED_ACTORS=%q\n' "$REPO" "$TRUSTED_ACTORS" |
 	put 0644 root:root /etc/remmy-bench/gate.conf || true
@@ -326,7 +328,7 @@ runner_changed=0
 env_file="$RUNNER_DIR/.env"
 {
 	grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$env_file" 2>/dev/null || true
-	echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate"
+	echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate.sh"
 } | put 0644 root:root "$env_file" && runner_changed=1
 put 0644 root:root /etc/systemd/system/gh-runner.service <<EOF && runner_changed=1
 [Unit]

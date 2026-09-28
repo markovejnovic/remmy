@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The runner's job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED): runs before
+# The runner's job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED; the runner
+# insists on a .sh name): runs before
 # any step of every job, and a non-zero exit fails the job before the
 # repository is even checked out. It is the one gate a pull request cannot
 # edit: a PR supplies its own copy of bench.yml, but not this file, which is

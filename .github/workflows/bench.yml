@@ -4,7 +4,7 @@ name: Bench
 # demo (minutes) runs on every push to main and on the owner's own PRs; full
 # (hours) runs nightly when main has moved. Only code the owner reviewed runs on
 # that machine: never a fork's PR, nor anyone else's. The plan job skips other
-# runs cleanly, but the guarantee is ci/bench-host/bench-job-gate on the runner,
+# runs cleanly, but the guarantee is ci/bench-host/bench-job-gate.sh on the runner,
 # because a PR brings its own copy of this file. This workflow holds no
 # secrets: bench-track.yml uploads the results to Bencher.
 on:

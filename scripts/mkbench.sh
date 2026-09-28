@@ -171,7 +171,7 @@ else
 	gh variable set BENCH_TRUSTED_ACTORS -R "$REPO" --body "${TRUST[*]}"
 fi
 echo "  ok    trusted: ${TRUST[*]}"
-# Fork PRs never reach the server (bench-job-gate refuses them); the label that
+# Fork PRs never reach the server (bench-job-gate.sh refuses them); the label that
 # once let a maintainer opt one in is gone.
 if gh label list -R "$REPO" --json name -q '.[].name' | grep -qx bench; then
 	gh label delete bench -R "$REPO" --yes >/dev/null
@@ -249,8 +249,8 @@ check "governor is performance (or none)" \
 	'! grep -hv performance /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | grep -q .'
 check "gh-runner may drop caches" "sudo -n -u gh-runner sudo -n -l /usr/local/sbin/bench-ctl drop-caches"
 check "job gate wired (root-owned .env)" '
-	grep -qx "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate" /opt/actions-runner/.env &&
-	test "$(stat -c %U /opt/actions-runner/.env /usr/local/sbin/bench-job-gate | sort -u)" = root'
+	grep -qx "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate.sh" /opt/actions-runner/.env &&
+	test "$(stat -c %U /opt/actions-runner/.env /usr/local/sbin/bench-job-gate.sh | sort -u)" = root'
 # The gate only binds a runner that started after .env named it; a stale
 # Runner.Listener (or two) would take jobs without it.
 if [[ -z $pending ]]; then

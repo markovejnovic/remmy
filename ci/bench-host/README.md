@@ -63,7 +63,7 @@ the ratio cancels that. Every tool's latency and throughput are tracked too; if
 **Only code you reviewed runs on this machine.** Never a fork's PR, and
 never anyone else's, even if you approve its workflow run.
 
-- **The gate.** `bench-job-gate` is the runner's job-started hook. It runs
+- **The gate.** `bench-job-gate.sh` is the runner's job-started hook. It runs
   before every job's first step, and refuses (failing the job before checkout)
   anything that isn't this repository, on `push`, `schedule` or
   `workflow_dispatch`, started and re-run by a trusted user, or a
