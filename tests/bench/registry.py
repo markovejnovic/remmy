@@ -79,17 +79,27 @@ def _linux_tools(remmy: Path) -> tuple[Tool, ...]:
     )
 
 
+# Each id names the tree's shape and file count, and is how results are labelled everywhere: pytest ids, chart
+# files, and Bencher (demo/balanced-58k/warm/remmy@4). test_fixture_ids_match_their_trees keeps the counts honest.
 FIXTURES = (
-    Fixture(id="F0", title="Anchor", depth=3, fanout=8, files=100),
-    Fixture(id="F1", title="Shallow and wide", depth=1, fanout=512, files=100),
-    Fixture(id="F2", title="Deep and narrow", depth=9, fanout=2, files=57),
-    Fixture(id="F3", title="Small files (4 KiB)", depth=3, fanout=8, files=100, size=4096),
-    Fixture(id="F4", title="Large files (1 MiB)", depth=2, fanout=6, files=45, size=1 << 20),
-    Fixture(id="F5", title="Tiny tree", depth=1, fanout=4, files=25),
-    Fixture(id="F6", title="Huge tree", depth=3, fanout=10, files=300),
-    # F0's file count in one directory: a single scan task, no subdirs to spread.
-    Fixture(id="F7", title="Flat directory", depth=0, fanout=0, files=58_500),
+    # 585 dirs (8 subdirs per dir, 3 levels) x 100 empty files: the anchor every other tree varies one thing of.
+    Fixture(id="balanced-58k", title="Anchor", depth=3, fanout=8, files=100),
+    # 512 sibling dirs x 100 files: many small scan tasks at one level.
+    Fixture(id="wide-51k", title="Shallow and wide", depth=1, fanout=512, files=100),
+    # A 9-level binary tree, 1,023 dirs x 57 files: long dependency chains.
+    Fixture(id="deep-58k", title="Deep and narrow", depth=9, fanout=2, files=57),
+    # The anchor with 4 KiB files: freeing data blocks, not just inodes.
+    Fixture(id="balanced-58k-4kib", title="Small files (4 KiB)", depth=3, fanout=8, files=100, size=4096),
+    # 43 dirs x 45 files of 1 MiB (1.9 GiB): unlink cost dominated by freeing extents.
+    Fixture(id="large-1mib-files", title="Large files (1 MiB)", depth=2, fanout=6, files=45, size=1 << 20),
+    # 5 dirs x 25 files: startup cost.
+    Fixture(id="tiny-125", title="Tiny tree", depth=1, fanout=4, files=25),
+    # 1,111 dirs (10 per dir, 3 levels) x 300 files.
+    Fixture(id="balanced-333k", title="Huge tree", depth=3, fanout=10, files=300),
+    # The anchor's file count in one directory: a single scan task, no subdirs to spread.
+    Fixture(id="flat-58k", title="Flat directory", depth=0, fanout=0, files=58_500),
 )
+ANCHOR = FIXTURES[0].id
 
 
 def baseline_tool(name: str, remmy: Path) -> Tool:
@@ -113,7 +123,7 @@ def plan(name: str, remmy: Path, platform: str = sys.platform, baselines: Mappin
         return Plan(
             name="demo",
             fixtures=FIXTURES[:1],
-            caches={"F0": (Cache.WARM,)},
+            caches={ANCHOR: (Cache.WARM,)},
             tools=tuple(t for t in tools if t.name in ("rm", "xargs", "remmy")) + extra,
             threads=(1, 4),
             # 12 samples in 4 shuffled rounds: a PR is judged against main from this one run, so each cell's CI
@@ -126,7 +136,7 @@ def plan(name: str, remmy: Path, platform: str = sys.platform, baselines: Mappin
         return Plan(
             name="full",
             fixtures=FIXTURES,
-            caches={f.id: (Cache.WARM, Cache.COLD) if f.id == "F0" else (Cache.WARM,) for f in FIXTURES},
+            caches={f.id: (Cache.WARM, Cache.COLD) if f.id == ANCHOR else (Cache.WARM,) for f in FIXTURES},
             tools=tools + extra,
             threads=(1, 2, 4, 8),
             sampling={
