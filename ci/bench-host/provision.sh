@@ -339,9 +339,12 @@ User=$RUNNER_USER
 WorkingDirectory=$RUNNER_DIR
 ExecStart=$RUNNER_DIR/run.sh
 Slice=bench.slice
-KillMode=process
+# Stop everything in the unit: run.sh doesn't forward SIGTERM, so with
+# KillMode=process an old Runner.Listener outlived every restart and kept
+# taking jobs with the old configuration (no job gate).
+KillMode=control-group
 KillSignal=SIGTERM
-TimeoutStopSec=5min
+TimeoutStopSec=2min
 Restart=always
 
 [Install]

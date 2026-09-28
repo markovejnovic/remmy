@@ -251,6 +251,14 @@ check "gh-runner may drop caches" "sudo -n -u gh-runner sudo -n -l /usr/local/sb
 check "job gate wired (root-owned .env)" '
 	grep -qx "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/bench-job-gate" /opt/actions-runner/.env &&
 	test "$(stat -c %U /opt/actions-runner/.env /usr/local/sbin/bench-job-gate | sort -u)" = root'
+# The gate only binds a runner that started after .env named it; a stale
+# Runner.Listener (or two) would take jobs without it.
+if [[ -z $pending ]]; then
+	check "one runner process, started after the gate" '
+		pids="$(pgrep -u gh-runner -f "bin/Runner.Listener")"
+		test "$(wc -w <<<"$pids")" = 1 &&
+		test "$(date -d "$(ps -o lstart= -p "$pids")" +%s)" -ge "$(stat -c %Y /opt/actions-runner/.env)"'
+fi
 check "SSH is key-only" "$SUDO sshd -T 2>/dev/null | grep -qx 'passwordauthentication no'"
 check "firewall loaded (inbound SSH only)" "$SUDO nft list table inet remmy_bench"
 check "security updates scheduled" 'systemctl is-enabled --quiet bench-patch.timer && systemctl is-active --quiet bench-patch.timer'
