@@ -18,7 +18,8 @@ permissions: {}
 jobs:
   track:
     name: Track
-    if: github.event.workflow_run.conclusion == 'success'
+    # A run that failed on a regression still uploaded its results: track them.
+    if: contains(fromJSON('["success", "failure"]'), github.event.workflow_run.conclusion)
     runs-on: ubuntu-latest
     permissions:
       actions: read

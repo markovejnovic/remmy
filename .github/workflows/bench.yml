@@ -30,6 +30,11 @@ env:
   # Keep in sync with release.yml: benchmarks time the binary users download.
   # Fully qualified: podman, unlike docker, has no default registry.
   GCC_IMAGE: docker.io/library/gcc:16.2.0-trixie@sha256:ef558a40d1f13115293feee01526dbdb9aaad7c9c5a00da05f471ce042e855c1
+  # The machine's control: a release that never changes, timed next to remmy on
+  # every non-PR run. If its ratio to rm moves, the machine changed, not remmy.
+  CONTROL_NAME: v0.1.0
+  CONTROL_URL: https://github.com/markovejnovic/remmy/releases/download/v0.1.0/remmy-Linux-x86_64.tar.gz
+  CONTROL_SHA256: 9aef985b47c765ad24851d09087f829ee4308b4a3b585fa861f5f1ce74504354
 
 jobs:
   plan:
@@ -107,7 +112,7 @@ jobs:
 
       # Rootless podman: files the container's root writes belong to the runner.
       - name: Build (static release, as shipped)
-        run: |
+        run: &build |
           podman run --rm -v "$PWD:/src" -w /src "$GCC_IMAGE" \
             bash -euxo pipefail -c '
               export DEBIAN_FRONTEND=noninteractive
@@ -118,6 +123,28 @@ jobs:
               strip build/gcc-dist/remmy
             '
 
+      # A PR is judged against main where it branched, timed in the same rounds:
+      # drift between runs cancels. That commit is on main, so it was reviewed.
+      - name: Check out main at the PR's base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+      - name: Build main at the PR's base
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ runner.temp }}/base
+        run: *build
+
+      - name: Fetch the control release
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p "$RUNNER_TEMP/control"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/control.tar.gz" "$CONTROL_URL"
+          echo "$CONTROL_SHA256  $RUNNER_TEMP/control.tar.gz" | sha256sum -c --quiet
+          tar -xzf "$RUNNER_TEMP/control.tar.gz" -C "$RUNNER_TEMP/control" --strip-components=1
+
       # No GitHub cache: a job on this machine must never write an entry that a
       # GitHub-hosted job (a release, say) could restore. uv is pinned.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -126,16 +153,28 @@ jobs:
           enable-cache: false
       - run: uv sync --locked
 
-      - name: Trim /bench
-        run: sudo -n /usr/local/sbin/bench-ctl fstrim
+      # Every suite starts from the same state: freed blocks handed back to the
+      # SSD, and no page cache left over from the build or earlier jobs.
+      - name: Trim /bench, drop caches
+        run: |
+          sudo -n /usr/local/sbin/bench-ctl fstrim
+          sudo -n /usr/local/sbin/bench-ctl drop-caches
 
       - name: Benchmark
-        run: >
-          uv run --locked pytest tests/bench/test_benchmark.py -p no:xdist -p no:cacheprovider
-          --bench="$SUITE"
-          --remmy "$GITHUB_WORKSPACE/build/gcc-dist/remmy"
-          --bench-scratch /bench
-          --bench-out "$RUNNER_TEMP/bench"
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [[ "$IS_PR" == true ]]; then
+            baseline="main=$RUNNER_TEMP/base/build/gcc-dist/remmy"
+          else
+            baseline="$CONTROL_NAME=$RUNNER_TEMP/control/remmy"
+          fi
+          uv run --locked pytest tests/bench/test_benchmark.py -p no:xdist -p no:cacheprovider \
+            --bench="$SUITE" \
+            --remmy "$GITHUB_WORKSPACE/build/gcc-dist/remmy" \
+            --bench-baseline "$baseline" \
+            --bench-scratch /bench \
+            --bench-out "$RUNNER_TEMP/bench"
 
       - name: Convert for Bencher
         env:
@@ -152,3 +191,16 @@ jobs:
           path: ${{ runner.temp }}/bench
           retention-days: 90
           if-no-files-found: error
+
+      # Last, so the results are uploaded (and tracked) even when this fails.
+      - name: Compare with main
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          fail=()
+          [[ "$IS_PR" == true ]] && fail=(--fail-on main)
+          status=0
+          uv run --locked python tests/bench/compare.py "$RUNNER_TEMP/bench/run.json" "${fail[@]}" \
+            > "$RUNNER_TEMP/compare.md" || status=$?
+          cat "$RUNNER_TEMP/compare.md" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"

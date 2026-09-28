@@ -71,6 +71,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     bench.addoption("--bench-out", type=Path, help="results directory (default: tests/bench/out/<plan>-<utc>)")
     bench.addoption("--bench-scratch", type=Path, help="where to build trees; its volume is measured (default: tmp)")
     bench.addoption("--bench-allow-dirty-env", action="store_true", help="time even on an unfit (busy) machine")
+    bench.addoption(
+        "--bench-baseline",
+        action="append",
+        metavar="NAME=PATH",
+        help="also time this remmy build as NAME and compare remmy with it at every thread count (repeatable)",
+    )
 
 
 def _sudo_ready() -> bool:

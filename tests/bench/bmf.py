@@ -7,9 +7,11 @@ suites never share a series. Measures:
 
 - latency: median time to delete the tree, in ns (Bencher's unit), bounded by the median's 95% CI.
 - throughput: files deleted per second at the median, bounded by the same CI.
-- time-ratio: remmy's median over the reference tool's (below 1 is faster), bounded by its BCa 95% CI. Only remmy
-  gets one: a ratio cancels drift that slows every tool on the box alike, so it is what regressions are judged on.
-  The other tools' latencies stay as controls that show such drift.
+- time-ratio: remmy's median over the reference tool's (below 1 is faster), bounded by its BCa 95% CI. A ratio
+  cancels drift that slows every tool on the box alike, so it is what regressions are judged on. remmy and its
+  baselines get one; the other tools' latencies stay as controls that show such drift. A baseline that never changes
+  (a pinned release) is the machine's control: if its ratio moves, the machine did.
+- time-ratio-vs-<baseline>: remmy's median over that baseline's at the same thread count, from the same run.
 """
 
 import json
@@ -43,10 +45,15 @@ def convert(run: dict) -> dict:
             "latency": _metric(median, ci["lo"], ci["hi"], scale=1e9),
             "throughput": _metric(cell["throughput_files_per_s"], rate_lo, rate_hi),
         }
+    judged = {run["plan"].get("subject", SUBJECT), *run["plan"].get("baselines", ())}
     for pair in run["summary"]["pairs"]:
-        if pair["tool"]["tool"] == SUBJECT:
+        if pair["tool"]["tool"] in judged:
             ci = pair["time_ratio_ci95"]
             out[_name(plan, pair["tool"])]["time-ratio"] = _metric(pair["time_ratio"], ci["lo"], ci["hi"])
+    for pair in run["summary"].get("versus", ()):
+        ci = pair["time_ratio_ci95"]
+        measure = f"time-ratio-vs-{pair['reference']['tool']}"
+        out[_name(plan, pair["tool"])][measure] = _metric(pair["time_ratio"], ci["lo"], ci["hi"])
     return out
 
 

@@ -177,3 +177,95 @@ def test_bmf_carries_the_summary_bencher_tracks(demo_plan, tmp_path):
     assert 0.5e9 < latency["value"] < 2e9  # ns
     rate = doc["demo/F0/warm/rm@1"]["throughput"]
     assert rate["lower_value"] <= rate["value"] <= rate["upper_value"]
+
+
+def test_baseline_comparison_recovers_planted_regression(tmp_path):
+    import bmf
+    from session import BenchSession
+
+    plan = registry.plan("demo", Path("/x/remmy"), baselines={"base": Path("/x/base")})
+    assert "base" in {t.name for t in plan.tools}
+    # remmy@4 regressed 10% against base@4; remmy@1 is unchanged.
+    medians = {
+        "rm@1": 1.0,
+        "xargs@1": 1.3,
+        "xargs@4": 0.7,
+        "remmy@1": 1.0,
+        "base@1": 1.0,
+        "remmy@4": 0.44,
+        "base@4": 0.4,
+    }
+    rng = np.random.default_rng(11)
+    cells = plan.cells(plan.fixtures[0], Cache.WARM)
+    samples = [
+        schema.Sample(cell=c, seconds=float(rng.lognormal(math.log(medians[c.label]), 0.02)))
+        for c in cells
+        for _ in range(12)
+    ]
+    session = BenchSession(plan=plan, env=None, out=tmp_path, rng=random.Random(1), samples=samples)
+    summary = session.summary()
+    versus = {(p.tool.label, p.reference.label): p for p in summary.versus}
+    assert set(versus) == {("remmy@1", "base@1"), ("remmy@4", "base@4")}
+    assert versus["remmy@4", "base@4"].verdict is Verdict.DISTINCT
+    assert 1.05 < versus["remmy@4", "base@4"].time_ratio < 1.15
+    assert versus["remmy@1", "base@1"].verdict is Verdict.TIE
+
+    doc = bmf.convert(json.loads(session.write_json(summary).read_text()))
+    anchor = plan.fixtures[0].id
+    assert "time-ratio-vs-base" in doc[f"demo/{anchor}/warm/remmy@4"]
+    assert "time-ratio" in doc[f"demo/{anchor}/warm/base@4"]  # a baseline is judged against rm too
+    assert "time-ratio" not in doc[f"demo/{anchor}/warm/xargs@4"]
+
+
+@pytest.mark.parametrize("name", ["remmy", "rm", "Base", "has space", ""])
+def test_baseline_names_are_checked(name):
+    with pytest.raises(ValueError):
+        registry.plan("demo", Path("/x/remmy"), baselines={name: Path("/x/base")})
+
+
+def test_compare_fails_only_on_a_distinct_slowdown(tmp_path, capsys):
+    import compare
+    from session import BenchSession
+
+    plan = registry.plan("demo", Path("/x/remmy"), baselines={"base": Path("/x/base")})
+    rng = np.random.default_rng(5)
+
+    def run_json(remmy4: float) -> Path:
+        medians = {"rm@1": 1.0, "xargs@1": 1.3, "xargs@4": 0.7, "remmy@1": 1.0, "base@1": 1.0, "base@4": 0.4}
+        medians["remmy@4"] = remmy4
+        cells = plan.cells(plan.fixtures[0], Cache.WARM)
+        samples = [
+            schema.Sample(cell=c, seconds=float(rng.lognormal(math.log(medians[c.label]), 0.02)))
+            for c in cells
+            for _ in range(12)
+        ]
+        s = BenchSession(plan=plan, env=None, out=tmp_path / str(remmy4), rng=random.Random(1), samples=samples)
+        return s.write_json(s.summary())
+
+    assert compare.main([str(run_json(0.44)), "--fail-on", "base"]) == 1  # 10% slower
+    assert "**Regression:**" in capsys.readouterr().out
+    assert compare.main([str(run_json(0.36)), "--fail-on", "base"]) == 0  # 10% faster
+    assert compare.main([str(run_json(0.401)), "--fail-on", "base"]) == 0  # unchanged
+    assert compare.main([str(run_json(0.44))]) == 0  # reports without --fail-on
+
+
+@pytest.mark.parametrize(("slowdown", "expected"), [(1.04, Verdict.DISTINCT), (1.005, Verdict.TIE)])
+def test_versus_rule_resolves_small_shifts_at_measured_noise(slowdown, expected, tmp_path):
+    """At the noise measured on the bench machine (~0.5% per sample), the 2% versus margin flags a 4% regression and
+    calls a 0.5% one a tie."""
+    from session import BenchSession
+
+    plan = registry.plan("demo", Path("/x/remmy"), baselines={"base": Path("/x/base")})
+    medians = {"rm@1": 1.0, "xargs@1": 1.3, "xargs@4": 0.7, "remmy@1": 1.0, "base@1": 1.0, "base@4": 0.4}
+    medians["remmy@4"] = 0.4 * slowdown
+    rng = np.random.default_rng(3)
+    reps = plan.sampling[Cache.WARM].reps
+    cells = plan.cells(plan.fixtures[0], Cache.WARM)
+    samples = [
+        schema.Sample(cell=c, seconds=float(rng.lognormal(math.log(medians[c.label]), 0.005)))
+        for c in cells
+        for _ in range(reps)
+    ]
+    summary = BenchSession(plan=plan, env=None, out=tmp_path, rng=random.Random(1), samples=samples).summary()
+    pair = next(p for p in summary.versus if p.tool.label == "remmy@4")
+    assert pair.verdict is expected

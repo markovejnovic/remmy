@@ -93,18 +93,40 @@ def summarize(run: Run) -> Summary:
         p, delta = mann_whitney_p(tool, ref), cliffs_delta(tool, ref)
         families[key.fixture, key.cache].append((key, ref_key, ratio, ci, p, delta))
 
+    # The subject against each baseline at the same thread count: its own Holm family per (fixture, cache, baseline).
+    versus_families = defaultdict(list)
+    for key, tool in secs.items():
+        if key.tool != plan.subject:
+            continue
+        for b in plan.baselines:
+            base_key = CellKey(key.fixture, b, key.threads, key.cache)
+            base = secs.get(base_key, np.empty(0))
+            if tool.size < 2 or base.size < 2:
+                continue
+            ratio, ci = bca_ratio_ci(tool, base, resamples=plan.bootstrap_resamples, seed=plan.seed)
+            p, delta = mann_whitney_p(tool, base), cliffs_delta(tool, base)
+            versus_families[key.fixture, key.cache, b].append((key, base_key, ratio, ci, p, delta))
+
+    return Summary(
+        cells=tuple(cells),
+        pairs=_decide(plan.rule, families.values()),
+        versus=_decide(plan.versus_rule, versus_families.values()),
+    )
+
+
+def _decide(rule, families) -> tuple[Pair, ...]:
+    """Holm-adjust each family's p-values, then apply the decision rule to every comparison."""
     pairs = []
-    # Holm within each (fixture, cache) family.
-    for family in families.values():
+    for family in families:
         for (key, ref_key, ratio, ci, _p, delta), adj in zip(family, holm([f[4] for f in family]), strict=True):
-            verdict = plan.rule.decide(ci, delta, adj)
+            verdict = rule.decide(ci, delta, adj)
             pairs.append(Pair(tool=key, reference=ref_key, time_ratio=ratio, time_ratio_ci95=ci, verdict=verdict))
-    return Summary(cells=tuple(cells), pairs=tuple(sorted(pairs, key=lambda p: p.tool)))
+    return tuple(sorted(pairs, key=lambda p: (p.tool, p.reference)))
 
 
 def headline(summary: Summary):
-    """One line per compared cell: its time relative to the reference."""
-    for p in summary.pairs:
+    """One line per compared cell: its time relative to the reference, then to each baseline."""
+    for p in (*summary.pairs, *summary.versus):
         ci = p.time_ratio_ci95
         speed = f"{p.speedup:.2f}x faster" if p.time_ratio < 1 else f"{1 / p.speedup:.2f}x slower"
         yield (

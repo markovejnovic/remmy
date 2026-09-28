@@ -161,9 +161,20 @@ class Plan:
     rule: DecisionRule
     bootstrap_resamples: int
     seed: int
+    subject: str = "remmy"
+    # Other builds of the subject (main at a PR's base, a pinned release), each compared with the subject at every
+    # thread count in the same shuffled rounds, so drift between runs cancels.
+    baselines: tuple[str, ...] = ()
+    # The rule for subject-vs-baseline. Its margin is narrower than `rule`'s: on the bench machine, ten identical demo
+    # runs spread by 0.3% (2026-09-28), so 2% is still ~7x the noise. `rule` (vs the reference) is pre-registered.
+    versus_rule: DecisionRule = field(default_factory=lambda: DecisionRule(margin=0.02))
 
     def __post_init__(self):
-        _require(self.reference in {t.name for t in self.tools}, f"reference {self.reference!r} is not a tool")
+        names = {t.name for t in self.tools}
+        _require(self.reference in names, f"reference {self.reference!r} is not a tool")
+        _require(self.subject in names, f"subject {self.subject!r} is not a tool")
+        _require(set(self.baselines) <= names, f"baselines {self.baselines} are not all tools")
+        _require(self.subject not in self.baselines, "the subject can't be its own baseline")
         _require(set(self.caches) == {f.id for f in self.fixtures}, "caches must name exactly the plan's fixtures")
 
     def fixture(self, fixture_id: str) -> Fixture:
@@ -217,7 +228,8 @@ class Pair:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Summary:
     cells: tuple[Cell, ...]
-    pairs: tuple[Pair, ...]
+    pairs: tuple[Pair, ...]  # every tool against the reference
+    versus: tuple[Pair, ...] = ()  # the subject against each baseline, thread count for thread count
 
     def pair(self, key: CellKey) -> Pair | None:
         return next((p for p in self.pairs if p.tool == key), None)

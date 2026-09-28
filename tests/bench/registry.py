@@ -1,8 +1,10 @@
 """What the benchmark compares: tools, trees, sampling and the decision rule."""
 
 import os
+import re
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from schema import Cache, DecisionRule, Fixture, Plan, Sampling, Tool
@@ -90,18 +92,33 @@ FIXTURES = (
 )
 
 
-def plan(name: str, remmy: Path, platform: str = sys.platform) -> Plan:
-    """``demo`` (minutes, warm only) or ``full`` (hours)."""
+def baseline_tool(name: str, remmy: Path) -> Tool:
+    """Another build of remmy, timed exactly like the subject."""
+    r = str(remmy)
+    return Tool(name=name, argv=(r, "-r", "{tree}"), env={"REMMY_THREADS": "{threads}"}, requires=(r,))
+
+
+def plan(name: str, remmy: Path, platform: str = sys.platform, baselines: Mapping[str, Path] | None = None) -> Plan:
+    """``demo`` (minutes, warm only) or ``full`` (hours). ``baselines`` adds other remmy builds (name -> executable),
+    each compared with remmy at every thread count."""
+    baselines = dict(baselines or {})
     tools = perf_tools(remmy, platform)
-    common = {"reference": "rm", "rule": DecisionRule(), "seed": SEED}
+    taken = {t.name for t in tools}
+    for b in baselines:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", b) or b in taken:
+            raise ValueError(f"bad baseline name {b!r}: lowercase, digits, . and -; not a tool's name")
+    extra = tuple(baseline_tool(b, p) for b, p in baselines.items())
+    common = {"reference": "rm", "rule": DecisionRule(), "seed": SEED, "baselines": tuple(baselines)}
     if name == "demo":
         return Plan(
             name="demo",
             fixtures=FIXTURES[:1],
             caches={"F0": (Cache.WARM,)},
-            tools=tuple(t for t in tools if t.name in ("rm", "xargs", "remmy")),
+            tools=tuple(t for t in tools if t.name in ("rm", "xargs", "remmy")) + extra,
             threads=(1, 4),
-            sampling={Cache.WARM: Sampling(reps=6, rounds=2, warmup=1)},
+            # 12 samples in 4 shuffled rounds: a PR is judged against main from this one run, so each cell's CI
+            # has to be tight (6 samples gave +-1.3% on remmy@4 while runs differed by only 0.3%).
+            sampling={Cache.WARM: Sampling(reps=12, rounds=4, warmup=1)},
             bootstrap_resamples=2000,
             **common,
         )
@@ -110,7 +127,7 @@ def plan(name: str, remmy: Path, platform: str = sys.platform) -> Plan:
             name="full",
             fixtures=FIXTURES,
             caches={f.id: (Cache.WARM, Cache.COLD) if f.id == "F0" else (Cache.WARM,) for f in FIXTURES},
-            tools=tools,
+            tools=tools + extra,
             threads=(1, 2, 4, 8),
             sampling={
                 Cache.WARM: Sampling(reps=20, rounds=4, warmup=3),
