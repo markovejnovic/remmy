@@ -16,7 +16,7 @@
   <!-- TODO(markovejnovic): Better benchmarks -->
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/res/time-dark.svg">
-    <img src=".github/res/time.svg" alt="Median time to delete a 58,500-file tree: remmy with 4 threads 0.41 s, find | xargs rm with 4 jobs 0.73 s, bfs, GNU rm and find about 1.2 s, /bin/rm 1.27 s" width="720">
+    <img src=".github/res/time.svg" alt="Median time to delete a 38,227-file tree: remmy with 4 threads 0.63 s, find | xargs rm with 4 jobs 1.10 s, GNU rm, bfs and find 1.4 to 1.5 s, /bin/rm 1.62 s" width="720">
   </picture>
 </p>
 
@@ -139,20 +139,20 @@ options for removing directories:
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/res/speedup-by-tree-dark.svg">
-    <img src=".github/res/speedup-by-tree.svg" alt="Speedup over /bin/rm by tree shape at 4 threads: remmy 2.5 to 3.1 times on trees of 51k to 333k files, 1.5 times on 1 MiB files, and 0.48 times on a 125-file tree" width="720">
+    <img src=".github/res/speedup-by-tree.svg" alt="Speedup over /bin/rm by tree shape at 4 threads: remmy 2.1 to 2.6 times on trees of 36k to 152k files, 1.5 times on 1 MiB files, 1.3 times on a 125-file tree, and no change on a single flat directory" width="720">
   </picture>
 </p>
 
 | Tool                          | Time    | Files/s | vs. `rm` |
 | ----------------------------- | ------: | ------: | -------: |
-| **remmy** (4 threads)         | 0.41 s  |   142k  | **3.1×** |
-| `find \| xargs -P4 rm`        | 0.73 s  |    80k  |    1.7×  |
-| `bfs -delete`                 | 1.17 s  |    50k  |    1.09× |
-| remmy (1 thread)              | 1.19 s  |    49k  |    1.07× |
-| GNU `rm -rf`                  | 1.19 s  |    49k  |    1.07× |
-| `find -delete`                | 1.22 s  |    48k  |    1.04× |
-| `/bin/rm -rf`                 | 1.27 s  |    46k  |    1.0×  |
-| `find \| xargs rm`            | 1.68 s  |    35k  |    0.76× |
+| **remmy** (4 threads)         | 0.63 s  |    60k  | **2.6×** |
+| `find \| xargs -P4 rm`        | 1.10 s  |    35k  |    1.48× |
+| GNU `rm -rf`                  | 1.39 s  |    28k  |    1.17× |
+| remmy (1 thread)              | 1.40 s  |    27k  |    1.16× |
+| `bfs -delete`                 | 1.43 s  |    27k  |    1.13× |
+| `find -delete`                | 1.52 s  |    25k  |    1.07× |
+| `/bin/rm -rf`                 | 1.62 s  |    24k  |    1.0×  |
+| `find \| xargs rm`            | 1.84 s  |    21k  |    0.88× |
 
 Here's what remmy does (or doesn't do) to speed stuff up.
 
