@@ -111,10 +111,68 @@ jobs:
       - run: cmake --preset ${{ matrix.preset }} -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - run: cmake --build --preset ${{ matrix.preset }}
       # Runs the pytest end-to-end suite (tests/) against the built executable.
-      # Parity checks output bytes, not build-type behaviour: release covers it.
+      # Parity checks output bytes, not build-type behaviour: release covers it,
+      # and scores it for the README badge (parity-badge).
       - run: ctest --preset ${{ matrix.preset }}
         env:
-          PYTEST_ADDOPTS: ${{ matrix.preset == 'debug' && '-m "not parity"' || '' }}
+          PYTEST_ADDOPTS: >-
+            ${{ matrix.preset == 'debug' && '-m "not parity"'
+            || format('--parity-report={0}/parity/parity.json', github.workspace) }}
+      - name: Summarize rm parity
+        if: always() && hashFiles('parity/parity.json') != ''
+        run: |
+          jq -r '
+            "### rm parity: \(.percent)% (\(.passed)/\(.total) cases)\n",
+            "| Gap | Failing cases |", "| --- | ---: |",
+            (.deferred as $d | .failing | to_entries[]
+              | "| `\(.key)`\(if .key | IN($d[]) then " (deferred)" else "" end) | \(.value) |"),
+            (.unlisted[] | "| unlisted: `\(.)` | 1 |")
+          ' parity/parity.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('parity/parity.json') != ''
+        with:
+          name: parity
+          path: parity/parity.json
+
+  # Publishes main's rm parity score as a shields.io endpoint on the badges
+  # branch, which holds that one file in a single force-pushed commit. Only a
+  # green run is scored: a failing one may not have run every case.
+  parity-badge:
+    name: parity badge
+    needs: remmy
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: parity
+      - name: Render the badge
+        run: |
+          jq '
+            if .total == 0 then error("no parity case ran") else . end
+            | {
+                schemaVersion: 1,
+                label: "rm parity",
+                message: "\(.percent)%",
+                color: (.percent | if . >= 95 then "brightgreen" elif . >= 85 then "green"
+                        elif . >= 75 then "yellowgreen" elif . >= 60 then "yellow" else "orange" end)
+              }
+          ' parity.json > badge.json
+          cat badge.json
+      - name: Push to the badges branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir out && mv badge.json out/parity.json && cd out
+          git init -q -b badges
+          git add parity.json
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "rm parity badge for ${GITHUB_SHA}"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" HEAD:refs/heads/badges
 
   # Linux runs GCC from Homebrew too: the presets name g++-16, and the runner's
   # non-root user keeps the permission tests meaningful.

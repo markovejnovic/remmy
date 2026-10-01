@@ -6,6 +6,7 @@
 
 [![Status: experimental](https://img.shields.io/badge/status-experimental-orange?style=flat-square)](#results)
 [![CI](https://img.shields.io/github/actions/workflow/status/markovejnovic/remmy/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/markovejnovic/remmy/actions/workflows/ci.yml)
+[![rm parity](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmarkovejnovic%2Fremmy%2Fbadges%2Fparity.json&style=flat-square)](#compatibility)
 ![C++26](https://img.shields.io/badge/C%2B%2B-26-00599C?style=flat-square&logo=cplusplus&logoColor=white)
 ![GCC 16](https://img.shields.io/badge/GCC-16-A42E2B?style=flat-square&logo=gnu&logoColor=white)
 [![License](https://img.shields.io/badge/license-source--available-lightgrey?style=flat-square)](LICENSE)
@@ -113,23 +114,50 @@ yell at me.**
 
 All known divergences between Apple's `rm` and `remmy` are documented here.
 
-#### Order preservation
+#### Interactive Mode
 
-The order of deletion is not consistent with Apple `rm` in two ways:
+`rm -i` asks `remove a? ` before each file and, with `-r`,
+`examine files in directory d? ` before entering a directory. `remmy` does not
+support this yet. The issue is tracked in #39.
 
-  - Passing `rm a a` results in:
+#### Write Protection Prompt
 
-      1. `rm` deletes `a` without any problems.
-      2. `rm` throws an error saying that `a` is not deleted.
+When stdin is a terminal and neither `-f` nor `-i` is given, `rm` asks before
+removing a file you cannot write to. `remmy` does not support this. The issue
+is tracked in #40.
 
-    `remmy` will try to delete the contents of `a` in two parallel threads.
-    This results in very verbose messages. Implementing this correctly is
-    very nontrivial and is tracked in
-    [#27](https://github.com/markovejnovic/remmy/issues/27).
+#### `-P`, `-W` and `-x`
 
-  - When running `remmy -v`, the output order for which files are deleted does
-    not follow DFS. This is because `remmy` is walking directories in
-    parallel. This is **correct and expected behavior**.
+- **`-P`**: `rm` opens each regular file for writing before removing it, so a
+  read-only file fails with `Permission denied`, even under `-f`. `remmy`
+  ignores `-P`. The issue is tracked in #43.
+- **`-W`** without `-r` is refused. The issue is tracked in #42.
+- **`-x`** with `-r` is refused. The issue is tracked in #41.
+
+#### FTS Corner Cases
+
+`rm -r` walks with `fts(3)`, and a few of its quirks are not copied yet:
+
+- A directory that can be listed but not entered (mode `0444`) is reported
+  once as `Permission denied` and left alone; `remmy` reports it differently.
+- At the root of a mounted volume, `rm` skips the hidden HFS+ metadata
+  entries silently and ends with `Resource busy`; `remmy` prints more errors.
+- An operand `l/`, where `l` is a symlink to `.` or `..`, is walked through
+  the link by `rm` and ends in `No such file or directory`.
+
+#### Repeated Operands Misbehave
+
+- **Repeated or nested operands.** `rm -rv d d` removes `d`, then reports
+  `d: No such file or directory` for the second one. `remmy` starts on the
+  second operand while the first is still being removed, so both race and the
+  messages depend on timing. Fixing this is tracked in
+  [#27](https://github.com/markovejnovic/remmy/issues/27).
+
+#### Verbose Ordering
+
+`-v` output and error messages behave differently. `rm` prints them in
+depth-first order. `remmy` walks sibling directories in parallel, so the same
+lines come out in a different order. This is **expected and will not change**.
 
 ## Performance
 
