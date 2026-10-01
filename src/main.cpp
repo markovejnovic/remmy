@@ -68,6 +68,7 @@
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/variant.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -77,9 +78,12 @@
 #include <tuple>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "cli.hpp"
 #include "dir_node.hpp"
+#include "operand.hpp"
+#include "walk.hpp"
 
 namespace {
 
@@ -151,7 +155,7 @@ class FileUnlinkWorker {
   /// This function is called by the scheduler periodically as new tasks are
   /// admitted into the scheduler.
   void Process(DirNode* task, auto& ctx) noexcept {
-    auto open_result = task->Open(path_buffer_);
+    auto open_result = task->Open(kernel_buffer_);
     if (!open_result) {
       const cutils::os::OpenError err = open_result.error();
       if (err.retryable) {
@@ -159,14 +163,30 @@ class FileUnlinkWorker {
         // directory and retry it later.
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
-        if (!cli_.Options().force ||
-            (RemoveEmptyLogged(task) != 0 && errno != ENOENT)) {
+        // Like the inline openat failure in Scan: report the directory and
+        // leave it be (-f first tries rmdir, as rm does), or, when it is
+        // gone, pass over it, or, when its parent cannot be searched, report
+        // that instead. It was never scanned, so nothing references it; only
+        // its parent's count of it is dropped.
+        DirNode* parent = task->parent_;
+        const int error = static_cast<int>(err.code);
+        task->PathInto(path_buffer_);
+        const int lookup = error == ENOENT || error == EACCES
+                               ? task->Lookup(kernel_buffer_)
+                               : 0;
+        // Gone, as in Vanished.
+        const bool vanished = error == ENOENT && lookup == ENOENT;
+        if (error == EACCES && lookup == EACCES && parent != nullptr) {
+          // Parked straight from the listing of its parent, which then never
+          // got to look a name up (see Unsearchable).
+          LeaveUnsearchable(parent);
+        } else if (!vanished &&
+                   (!cli_.Options().force ||
+                    (RemoveEmptyLogged(task) != 0 && errno != ENOENT))) {
           failures_++;
-          WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
-                 static_cast<int>(err.code));
+          WarnAt(cli_.CommandName(), path_buffer_, error);
         }
 
-        DirNode* parent = task->parent_;
         delete task;
         if (parent != nullptr) {
           MaybeCleanupDirNode(parent);
@@ -176,18 +196,78 @@ class FileUnlinkWorker {
       return;
     }
 
-    Scan(task, ctx);
+    // -x: a directory on another device is removed without being walked,
+    // which leaves a mount point to fail with EBUSY.
+    if (!cli_.Options().one_file_system || !OnOtherDevice(task)) {
+      Scan(task, ctx);
+    }
     task->fd_.Close();
 
     MaybeCleanupDirNode(task);
   }
 
  private:
+  /// @brief Whether the entry `name` of `task`, which the listing of `task`
+  ///        returned and an open of just failed with ENOENT, is not there
+  ///        to be looked up either: fts passes over such a name without a
+  ///        word, as it passes over the HFS+ private directories at the root
+  ///        of a volume, which a listing returns and a lookup does not find.
+  static auto Vanished(const DirNode* task, const char* name) noexcept -> bool {
+    struct stat entry_stat;
+    return cutils::os::fstatat(task->fd_, name, &entry_stat,
+                               AT_SYMLINK_NOFOLLOW) != 0 &&
+           errno == ENOENT;
+  }
+
+  /// @brief -x: whether `task`, open, is on another device than its
+  ///        operand. The operand itself never is.
+  [[nodiscard]] auto OnOtherDevice(const DirNode* task) const noexcept -> bool {
+    if (task->parent_ == nullptr) {
+      return false;
+    }
+    struct stat dir_stat;
+    return cutils::os::fstatat(task->fd_, ".", &dir_stat, 0) == 0 &&
+           dir_stat.st_dev != task->walk_.Device();
+  }
+
+  /// @brief Whether a failure with `error` on the entry `name` of `task`
+  ///        comes from `task` not being searchable: listed, as a directory
+  ///        with read but no search permission (0444) can be, but no name in
+  ///        it looked up. Settled once per directory, on its first EACCES,
+  ///        by looking the name up again with fstatat(2), which needs
+  ///        nothing but search permission on `task`.
+  auto Unsearchable(const DirNode* task, const char* name, int error,
+                    bool& searchable) noexcept -> bool {
+    if (error != EACCES || searchable) {
+      return false;
+    }
+    struct stat entry_stat;
+    if (cutils::os::fstatat(task->fd_, name, &entry_stat,
+                            AT_SYMLINK_NOFOLLOW) == 0) {
+      searchable = true;
+      return false;
+    }
+    return errno == EACCES;
+  }
+
+  /// @brief Reports `task` as fts(3) does a directory it could list but not
+  ///        search: once, as "<dir>: Permission denied", and without
+  ///        removing it (see DirNode::unsearchable_).
+  auto LeaveUnsearchable(DirNode* task) noexcept -> void {
+    if (!task->unsearchable_.Claim()) {
+      return;
+    }
+    failures_++;
+    WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), EACCES);
+  }
+
   /// @brief Scan through the given directory.
   void Scan(DirNode* task, auto& ctx) noexcept {
     // Entries are logged as "<dir>/<name>", fts's path for them.
     const std::string_view dir_path =
         cli_.Options().verbose ? task->PathInto(scan_path_) : "";
+    // Whether a name in the directory was looked up (see Unsearchable).
+    bool searchable = false;
     for (const auto& read : dirs_.Read(task->fd_)) {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
@@ -208,6 +288,10 @@ class FileUnlinkWorker {
         struct stat st;
         if (cutils::os::fstatat(task->fd_, entry.c_str(), &st,
                                 AT_SYMLINK_NOFOLLOW) != 0) {
+          if (errno == EACCES) {
+            LeaveUnsearchable(task);
+            break;
+          }
           if (errno != ENOENT) {
             failures_++;
             WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
@@ -221,11 +305,17 @@ class FileUnlinkWorker {
       if (!is_dir) {
         if (LogIfRemoved(cli_, stdout_,
                          cutils::os::unlinkat(task->fd_, entry.c_str(), 0),
-                         "{}/{}", dir_path, entry.name()) != 0 &&
-            errno != ENOENT) {
-          failures_++;
-          WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), entry.name(),
-                 errno);
+                         "{}/{}", dir_path, entry.name()) != 0) {
+          const int error = errno;
+          if (Unsearchable(task, entry.c_str(), error, searchable)) {
+            LeaveUnsearchable(task);
+            break;
+          }
+          if (error != ENOENT) {
+            failures_++;
+            WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
+                   entry.name(), error);
+          }
         }
         continue;
       }
@@ -239,6 +329,14 @@ class FileUnlinkWorker {
         if (opened) {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
+          const int error = static_cast<int>(opened.error().code);
+          if (error == ENOENT && Vanished(task, entry.c_str())) {
+            continue;
+          }
+          if (Unsearchable(task, entry.c_str(), error, searchable)) {
+            LeaveUnsearchable(task);
+            break;
+          }
           if (!cli_.Options().force ||
               (LogIfRemoved(
                    cli_, stdout_,
@@ -247,7 +345,7 @@ class FileUnlinkWorker {
                errno != ENOENT)) {
             failures_++;
             WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
-                   entry.name(), static_cast<int>(opened.error().code));
+                   entry.name(), error);
           }
           continue;
         }
@@ -257,8 +355,8 @@ class FileUnlinkWorker {
       // steal and finish it the instant Submit returns, and the parent's own
       // scan reference (held until Finish, below) keeps
       // `remaining_children_dirs_` from reaching zero mid-scan regardless.
-      auto* child =
-          new DirNode(std::move(child_fd), task, std::string{entry.name()});
+      auto* child = new DirNode(std::move(child_fd), task,
+                                std::string{entry.name()}, task->walk_);
       task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
       const std::size_t tier =
           child->fd_.IsOpen() ? kRunnable : kAwaitingDescriptor;
@@ -271,8 +369,9 @@ class FileUnlinkWorker {
   }
 
   auto RemoveEmptyLogged(const DirNode* node) noexcept -> int {
-    return LogIfRemoved(cli_, stdout_, node->RemoveEmpty(path_buffer_), "{}",
-                        path_buffer_);
+    const int status = node->RemoveEmpty(kernel_buffer_);
+    return LogIfRemoved(cli_, stdout_, status, "{}",
+                        node->PathInto(path_buffer_));
   }
 
   /// @brief Cleanup a DirNode if we need to.
@@ -292,9 +391,15 @@ class FileUnlinkWorker {
       }
       std::atomic_thread_fence(std::memory_order_acquire);
 
-      if (RemoveEmptyLogged(current) != 0 && errno != ENOENT) {
-        failures_++;
-        WarnAt(cli_.CommandName(), path_buffer_, errno);
+      const bool root = current->parent_ == nullptr;
+      if (!current->unsearchable_.Claimed()) {
+        // rm reports an operand that is gone by the time it is removed (a
+        // walk through "l/" can remove the link l), unless under -f.
+        if (RemoveEmptyLogged(current) != 0 &&
+            (errno != ENOENT || (root && !cli_.Options().force))) {
+          failures_++;
+          WarnAt(cli_.CommandName(), path_buffer_, errno);
+        }
       }
 
       delete current;
@@ -320,6 +425,10 @@ class FileUnlinkWorker {
   /// @brief Thread-local buffer holding the path of the directory being
   ///        scanned, for -v's lines about its entries.
   std::string scan_path_;
+
+  /// @brief Thread-local buffer for the path handed to the kernel (see
+  ///        Walk::PathOf).
+  std::string kernel_buffer_;
 };
 
 using Scheduler =
@@ -331,8 +440,8 @@ using Scheduler =
 /// directory under -r or -R, or more than three in all. Only the first
 /// character of each answer line counts; anything but y or n asks again, and
 /// end of input declines.
-auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
-    -> bool {
+auto ConfirmPromptOnce(std::ranges::input_range auto operands,
+                       bool recursive) noexcept -> bool {
   static constexpr std::size_t kMaxSilentOperands = 3;
   static constexpr std::size_t kPromptBuffer = 256;
   auto& in = cutils::io::stdin_reader;
@@ -340,14 +449,14 @@ auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
   std::size_t dirs = 0;
   std::size_t files = 0;
   std::string_view dir_name;
-  for (const char* path : operands) {
+  for (const remmy::Operand operand : operands) {
     struct stat path_stat;
-    if (cutils::os::lstat(path, &path_stat) != 0) {
+    if (cutils::os::lstat(operand.CStr(), &path_stat) != 0) {
       continue;
     }
     if (S_ISDIR(path_stat.st_mode)) {
       ++dirs;
-      dir_name = path;
+      dir_name = operand.Path();
     } else {
       ++files;
     }
@@ -423,9 +532,9 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
   return 0;
 }
 
-auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
-    -> void {
-  auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
+auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path,
+              const remmy::Walk& walk) -> void {
+  auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path}, walk);
   if (!scheduler.Submit(task)) {
     delete task;
   }
@@ -445,67 +554,72 @@ auto RunRm(const remmy::Cli& cli) -> int {
        .handle = 0},
       STDOUT_FILENO);
 
+  // Declared before the scheduler, so it outlives the workers reading it.
+  std::deque<remmy::Walk> walks;
+
   const std::uint16_t threads = ThreadCount();
   const std::string_view prog = cli.CommandName();
   const FileUnlinkWorker prototype(cli, stdout);
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
-  for (const char* path : cli.Operands()) {
-    struct stat path_stat;
-    if (cutils::os::lstat(path, &path_stat) != 0) {
-      if (const int error = errno;
-          !(force && cli.Options().recursive && cutils::os::GetEUid() != 0) &&
-          (!force || error != ENOENT)) {
-        WarnAt(prog, path, error);
-        ++failures;
-      }
-      continue;
-    }
-
-    if (!S_ISDIR(path_stat.st_mode)) {
-      if (LogIfRemoved(cli, stdout, cutils::os::unlink(path), "{}", path) !=
-          0) {
-        if (const int error = errno; !force || error != ENOENT) {
-          WarnAt(prog, path, error);
+  const auto remove = cutils::variant::Overloaded{
+      [&](const remmy::MissingOperand& missing) {
+        if (!(force && cli.Options().recursive && cutils::os::GetEUid() != 0) &&
+            (!force || missing.error != ENOENT)) {
+          WarnAt(prog, missing.operand.Path(), missing.error);
           ++failures;
         }
-      }
-      continue;
-    }
+      },
+      [&](const remmy::FileOperand& file) {
+        const char* path = file.operand.CStr();
+        if (LogIfRemoved(cli, stdout, cutils::os::unlink(path), "{}", path) !=
+            0) {
+          if (const int error = errno; !force || error != ENOENT) {
+            WarnAt(prog, path, error);
+            ++failures;
+          }
+        }
+      },
+      [&](const remmy::DirectoryOperand& dir) {
+        const char* path = dir.operand.CStr();
+        if (!cli.Options().recursive) {
+          if (cli.Options().dir) {
+            if (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}",
+                             path) != 0 &&
+                (!force || errno != ENOENT)) {
+              WarnAt(prog, path, errno);
+              ++failures;
+            }
+            return;
+          }
 
-    if (!cli.Options().recursive) {
-      if (cli.Options().dir) {
-        if (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}", path) !=
-                0 &&
-            (!force || errno != ENOENT)) {
-          WarnAt(prog, path, errno);
+          std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
+                                          "{}: is a directory", path);
           ++failures;
+          return;
         }
 
-        continue;
-      }
+        auto dirfd = cutils::os::open(
+            path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (!dirfd) {
+          if (!force || (LogIfRemoved(cli, stdout, cutils::os::rmdir(path),
+                                      "{}", path) != 0 &&
+                         errno != ENOENT)) {
+            WarnAt(prog, path, static_cast<int>(dirfd.error().code));
+            ++failures;
+          }
+          return;
+        }
 
-      std::ignore = cutils::io::Warnx(cutils::io::stderr_writer, prog,
-                                      "{}: is a directory", path);
-      ++failures;
-      continue;
-    }
-
-    auto dirfd =
-        cutils::os::open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (!dirfd) {
-      if (!force || (LogIfRemoved(cli, stdout, cutils::os::rmdir(path), "{}",
-                                  path) != 0 &&
-                     errno != ENOENT)) {
-        WarnAt(prog, path, static_cast<int>(dirfd.error().code));
-        ++failures;
-      }
-      continue;
-    }
-
-    // Seeding precedes Run, so this is still single-threaded.
-    SeedRoot(scheduler, *std::move(dirfd), path);
+        const remmy::Walk& walk =
+            walks.emplace_back(remmy::Walk::Start(dir, *dirfd));
+        // Seeding precedes Run, so this is still single-threaded.
+        SeedRoot(scheduler, *std::move(dirfd), path, walk);
+      },
+  };
+  for (const remmy::Operand operand : cli.Operands()) {
+    std::visit(remove, remmy::Resolve(operand));
   }
 
   (void)scheduler.Wait();

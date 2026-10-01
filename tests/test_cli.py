@@ -86,7 +86,6 @@ def test_dot_slash_prefix_removes_dash_prefixed_names(run: Runner, workdir: Path
         (("-f", "-i", "f"), "i"),
         (("-W", "f"), "W"),
         (("-fW", "f"), "W"),
-        (("-rx", "d"), "x"),
     ],
 )
 def test_unimplemented_safety_options_refuse_everything(run: Runner, workdir: Path, args, letter: str) -> None:
