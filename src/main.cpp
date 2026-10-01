@@ -167,15 +167,11 @@ class FileUnlinkWorker {
         DirNode* parent = task->parent_;
         const int error = static_cast<int>(err.code);
         const char* path = task->PathInto(path_buffer_);
-        const int lookup =
-            error == ENOENT || error == EACCES ? Lookup(path) : 0;
-        // Gone, as in Vanished.
-        const bool vanished = error == ENOENT && lookup == ENOENT;
-        if (error == EACCES && lookup == EACCES && parent != nullptr) {
+        if (error == EACCES && parent != nullptr && Lookup(path) == EACCES) {
           // Parked straight from the listing of its parent, which then never
           // got to look a name up (see Unsearchable).
           LeaveUnsearchable(parent);
-        } else if (!vanished &&
+        } else if (error != ENOENT &&
                    (!cli_.Options().force ||
                     (RemoveEmptyLogged(task) != 0 && errno != ENOENT))) {
           failures_++;
@@ -203,18 +199,6 @@ class FileUnlinkWorker {
   static auto Lookup(const char* path) noexcept -> int {
     struct stat path_stat;
     return cutils::os::lstat(path, &path_stat) == 0 ? 0 : errno;
-  }
-
-  /// @brief Whether the entry `name` of `task`, which the listing of `task`
-  ///        returned and an open of just failed with ENOENT, is not there
-  ///        to be looked up either: fts passes over such a name without a
-  ///        word, as it passes over the HFS+ private directories at the root
-  ///        of a volume, which a listing returns and a lookup does not find.
-  static auto Vanished(const DirNode* task, const char* name) noexcept -> bool {
-    struct stat entry_stat;
-    return cutils::os::fstatat(task->fd_, name, &entry_stat,
-                               AT_SYMLINK_NOFOLLOW) != 0 &&
-           errno == ENOENT;
   }
 
   /// @brief Whether a failure with `error` on the entry `name` of `task`
@@ -317,7 +301,10 @@ class FileUnlinkWorker {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
           const int error = static_cast<int>(opened.error().code);
-          if (error == ENOENT && Vanished(task, entry.c_str())) {
+          // A name the listing returned but a lookup cannot find is passed
+          // over without a word, as fts passes over the HFS+ private
+          // directories at the root of a volume.
+          if (error == ENOENT) {
             continue;
           }
           if (Unsearchable(task, entry.c_str(), error, searchable)) {
