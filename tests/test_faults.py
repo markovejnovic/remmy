@@ -69,11 +69,20 @@ def test_failed_rmdir_is_reported_by_name(frun, tree, workdir: Path, threads: in
     check.equal(fstree.listing(workdir), {"t", "t/a", "t/a/b"})
 
 
-@pytest.mark.parametrize("err", [EIO, errno.EACCES, errno.ENOENT, errno.ELOOP])
+@pytest.mark.parametrize("err", [EIO, errno.EACCES, errno.ELOOP])
 def test_failed_subdirectory_open_skips_only_that_subtree(frun, tree, workdir: Path, err: int) -> None:
     res, hit = frun("-r", "t", faults=[("openat", err, "name=a")])
     assert hit
     _fails_with(res, err, "t/a")
+    check.equal(fstree.listing(workdir), {"t", "t/a", "t/a/victim", "t/a/b", "t/a/b/g", "t/a/sib"})
+
+
+def test_vanished_subdirectory_is_passed_over(frun, tree, workdir: Path) -> None:
+    """ENOENT on a listed name means it is gone, as fts takes it: no word about it, only its parent's rmdir fails."""
+    res, hit = frun("-r", "t", faults=[("openat", errno.ENOENT, "name=a")])
+    assert hit
+    check.equal(res.returncode, 1, res)
+    check.equal(res.errors, [f"remmy: t: {os.strerror(errno.ENOTEMPTY)}"], res)
     check.equal(fstree.listing(workdir), {"t", "t/a", "t/a/victim", "t/a/b", "t/a/b/g", "t/a/sib"})
 
 
