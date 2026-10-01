@@ -10,6 +10,7 @@
 #include <expected>
 #include <iterator>
 #include <string>
+#include <string_view>
 
 namespace remmy {
 
@@ -92,15 +93,24 @@ struct DirNode {
   /// This also acts as the refcount which keeps the DirNode alive in memory.
   std::atomic<std::uint32_t> remaining_children_dirs_;
 
-  explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name)
+  /// @brief The index of the operand whose walk found this directory.
+  std::uint32_t operand_;
+
+  explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name,
+                   std::uint32_t operand)
       : fd_(std::move(fd)),
         parent_(parent),
         name_(std::move(name)),
-        remaining_children_dirs_(1) {}
+        remaining_children_dirs_(1),
+        operand_(operand) {}
 
-  /// @brief Walk the parent chain to build the full absolute path into the
-  ///        given output buffer.
-  auto PathInto(std::string& out) const noexcept -> const char*;
+  /// @brief Walk the parent chain to build the full path into the given
+  ///        output buffer.
+  ///
+  /// @param root When not empty, stands in for the name of the root at the
+  ///             top of the chain: "." makes the path relative to the root.
+  auto PathInto(std::string& out, std::string_view root = {}) const noexcept
+      -> const char*;
 
   /// @brief Get a read-only range over this node and its ancestors.
   ///
@@ -114,17 +124,21 @@ struct DirNode {
 
   /// @brief Try to open this DirNode.
   ///
-  /// @param path_buf A scratch buffer which this utility uses to compute
-  ///                 an absolute path.
+  /// @param scratch A scratch buffer which this utility uses to compute
+  ///                the path to open.
+  /// @param root When not null, the root of the walk, open, which the path
+  ///             is then taken relative to rather than to the operand as
+  ///             typed.
   ///
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
-  auto Open(std::string& scratch) noexcept
+  auto Open(std::string& scratch, const cutils::os::Fd* root = nullptr) noexcept
       -> std::expected<void, cutils::os::OpenError>;
 
   /// @brief Remove this (by now empty) directory.
   ///
   /// @param scratch A scratch buffer; it holds this node's path afterwards.
-  auto RemoveEmpty(std::string& scratch) const noexcept -> int;
+  auto RemoveEmpty(std::string& scratch,
+                   const cutils::os::Fd* root = nullptr) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the

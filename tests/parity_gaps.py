@@ -66,13 +66,6 @@ GAPS = {
         _OPERAND_ORDER,
         _OPERAND_ORDER,
     ),
-    "walk-semantics": Gap(
-        "fts(3) behaviour inside a walk: an operand 'l/' with l pointing at '.' or '..' walks through the link and "
-        "reports the final rmdir's ENOENT.",
-        _keys("""
-edges symlinks_to_directories r_symlink_to_dot_slash r_symlink_to_dotdot_slash
-"""),
-    ),
     "prompt-interactive": Gap(
         "-i asks 'remove <path>? ' on stderr for each operand, reads one line from stdin (pipe, /dev/null or tty) and "
         "takes it through rpmatch(3) in the current locale ('j' under de_DE; EOF and anything unrecognised mean no; a "

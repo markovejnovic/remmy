@@ -134,13 +134,6 @@ is tracked in #40.
 - **`-W`** without `-r` is refused. The issue is tracked in #42.
 - **`-x`** with `-r` is refused. The issue is tracked in #41.
 
-#### FTS Corner Cases
-
-`rm -r` walks with `fts(3)`, and a few of its quirks are not copied yet:
-
-- An operand `l/`, where `l` is a symlink to `.` or `..`, is walked through
-  the link by `rm` and ends in `No such file or directory`.
-
 #### Repeated Operands Misbehave
 
 - **Repeated or nested operands.** `rm -rv d d` removes `d`, then reports
