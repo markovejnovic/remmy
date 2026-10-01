@@ -159,14 +159,23 @@ class FileUnlinkWorker {
         // directory and retry it later.
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
-        if (!cli_.Options().force ||
-            (RemoveEmptyLogged(task) != 0 && errno != ENOENT)) {
+        // Like the inline openat failure in Scan: report the directory and
+        // leave it be (-f first tries rmdir, as rm does), or, when its parent
+        // cannot be searched, report that instead. It was never scanned, so
+        // nothing references it; only its parent's count of it is dropped.
+        DirNode* parent = task->parent_;
+        const int error = static_cast<int>(err.code);
+        const char* path = task->PathInto(path_buffer_);
+        if (error == EACCES && parent != nullptr && Lookup(path) == EACCES) {
+          // Parked straight from the listing of its parent, which then never
+          // got to look a name up (see Unsearchable).
+          LeaveUnsearchable(parent);
+        } else if (!cli_.Options().force ||
+                   (RemoveEmptyLogged(task) != 0 && errno != ENOENT)) {
           failures_++;
-          WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
-                 static_cast<int>(err.code));
+          WarnAt(cli_.CommandName(), path_buffer_, error);
         }
 
-        DirNode* parent = task->parent_;
         delete task;
         if (parent != nullptr) {
           MaybeCleanupDirNode(parent);
@@ -183,11 +192,51 @@ class FileUnlinkWorker {
   }
 
  private:
+  /// @brief Looks `path` up without following it: 0 when that works, or else
+  ///        errno.
+  static auto Lookup(const char* path) noexcept -> int {
+    struct stat path_stat;
+    return cutils::os::lstat(path, &path_stat) == 0 ? 0 : errno;
+  }
+
+  /// @brief Whether a failure with `error` on the entry `name` of `task`
+  ///        comes from `task` not being searchable: listed, as a directory
+  ///        with read but no search permission (0444) can be, but no name in
+  ///        it looked up. Settled once per directory, on its first EACCES,
+  ///        by looking the name up again with fstatat(2), which needs
+  ///        nothing but search permission on `task`.
+  static auto Unsearchable(const DirNode* task, const char* name, int error,
+                           bool& searchable) noexcept -> bool {
+    if (error != EACCES || searchable) {
+      return false;
+    }
+    struct stat entry_stat;
+    if (cutils::os::fstatat(task->fd_, name, &entry_stat,
+                            AT_SYMLINK_NOFOLLOW) == 0) {
+      searchable = true;
+      return false;
+    }
+    return errno == EACCES;
+  }
+
+  /// @brief Reports `task` as fts(3) does a directory it could list but not
+  ///        search: once, as "<dir>: Permission denied", and without
+  ///        removing it (see DirNode::unsearchable_).
+  auto LeaveUnsearchable(DirNode* task) noexcept -> void {
+    if (task->unsearchable_.exchange(true, std::memory_order_relaxed)) {
+      return;
+    }
+    failures_++;
+    WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), EACCES);
+  }
+
   /// @brief Scan through the given directory.
   void Scan(DirNode* task, auto& ctx) noexcept {
     // Entries are logged as "<dir>/<name>", fts's path for them.
     const std::string_view dir_path =
         cli_.Options().verbose ? task->PathInto(scan_path_) : "";
+    // Whether a name in the directory was looked up (see Unsearchable).
+    bool searchable = false;
     for (const auto& read : dirs_.Read(task->fd_)) {
       if (!read) {
         // A failed read is not the end of the directory; say so and stop.
@@ -208,6 +257,10 @@ class FileUnlinkWorker {
         struct stat st;
         if (cutils::os::fstatat(task->fd_, entry.c_str(), &st,
                                 AT_SYMLINK_NOFOLLOW) != 0) {
+          if (errno == EACCES) {
+            LeaveUnsearchable(task);
+            break;
+          }
           if (errno != ENOENT) {
             failures_++;
             WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
@@ -221,11 +274,17 @@ class FileUnlinkWorker {
       if (!is_dir) {
         if (LogIfRemoved(cli_, stdout_,
                          cutils::os::unlinkat(task->fd_, entry.c_str(), 0),
-                         "{}/{}", dir_path, entry.name()) != 0 &&
-            errno != ENOENT) {
-          failures_++;
-          WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), entry.name(),
-                 errno);
+                         "{}/{}", dir_path, entry.name()) != 0) {
+          const int error = errno;
+          if (Unsearchable(task, entry.c_str(), error, searchable)) {
+            LeaveUnsearchable(task);
+            break;
+          }
+          if (error != ENOENT) {
+            failures_++;
+            WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
+                   entry.name(), error);
+          }
         }
         continue;
       }
@@ -239,6 +298,11 @@ class FileUnlinkWorker {
         if (opened) {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
+          const int error = static_cast<int>(opened.error().code);
+          if (Unsearchable(task, entry.c_str(), error, searchable)) {
+            LeaveUnsearchable(task);
+            break;
+          }
           if (!cli_.Options().force ||
               (LogIfRemoved(
                    cli_, stdout_,
@@ -247,7 +311,7 @@ class FileUnlinkWorker {
                errno != ENOENT)) {
             failures_++;
             WarnAt(cli_.CommandName(), task->PathInto(path_buffer_),
-                   entry.name(), static_cast<int>(opened.error().code));
+                   entry.name(), error);
           }
           continue;
         }
@@ -292,7 +356,8 @@ class FileUnlinkWorker {
       }
       std::atomic_thread_fence(std::memory_order_acquire);
 
-      if (RemoveEmptyLogged(current) != 0 && errno != ENOENT) {
+      if (!current->unsearchable_.load(std::memory_order_relaxed) &&
+          RemoveEmptyLogged(current) != 0 && errno != ENOENT) {
         failures_++;
         WarnAt(cli_.CommandName(), path_buffer_, errno);
       }
