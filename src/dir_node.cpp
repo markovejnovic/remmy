@@ -21,17 +21,23 @@ namespace remmy {
 
 namespace {
 
-/// @brief openat relative to `dir`, or to the cwd when `dir` is not open.
-auto OpenAt(const cutils::os::Fd& dir, const char* name, int flags) noexcept
+/// @brief openat relative to `dir`, or to `start` when `dir` is not open, or
+///        to the cwd when neither is.
+auto OpenAt(const cutils::os::Fd& dir, const cutils::os::Fd* start,
+            const char* name, int flags) noexcept
     -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
-  return dir.IsOpen() ? cutils::os::openat(dir, name, flags)
-                      : cutils::os::open(name, flags);
+  if (dir.IsOpen()) {
+    return cutils::os::openat(dir, name, flags);
+  }
+  return start != nullptr ? cutils::os::openat(*start, name, flags)
+                          : cutils::os::open(name, flags);
 }
 
 /// @brief Open `path`, even when it is PATH_MAX bytes or longer.
 ///
 /// Returns why it could not be opened on failure.
-auto OpenLong(std::string_view path, int flags) noexcept
+auto OpenLong(const cutils::os::Fd* start, std::string_view path,
+              int flags) noexcept
     -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
   std::array<char, PATH_MAX> piece;
   cutils::os::Fd dir;
@@ -43,7 +49,8 @@ auto OpenLong(std::string_view path, int flags) noexcept
     }
     std::copy_n(path.begin(), cut, piece.begin());
     piece[cut] = '\0';
-    auto next = OpenAt(dir, piece.data(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    auto next =
+        OpenAt(dir, start, piece.data(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (!next) {
       return std::unexpected(next.error());
     }
@@ -56,7 +63,7 @@ auto OpenLong(std::string_view path, int flags) noexcept
   }
   std::copy_n(path.begin(), path.size(), piece.begin());
   piece[path.size()] = '\0';
-  return OpenAt(dir, piece.data(), flags);
+  return OpenAt(dir, start, piece.data(), flags);
 }
 
 }  // namespace
@@ -69,40 +76,48 @@ auto DirNode::ParentsMut() noexcept -> MutableParentChain {
   return MutableParentChain{this};
 }
 
-auto DirNode::PathInto(std::string& out) const noexcept -> const char* {
+auto DirNode::PathInto(std::string& out, std::string_view root) const noexcept
+    -> const char* {
+  // The name a node contributes: its own, or `root` in place of the root's.
+  const auto name_of = [root](const DirNode* t) -> std::string_view {
+    return t->parent_ == nullptr && !root.empty() ? root : t->name_;
+  };
+
   // I want to avoid resizing here too much, so first we count the total
   // number of bytes we'd need in the directory tree.
   const std::size_t total = std::ranges::fold_left(
-      Parents(), std::size_t{0}, [](std::size_t acc, const DirNode* t) {
-        return acc + t->name_.size() +
+      Parents(), std::size_t{0}, [&name_of](std::size_t acc, const DirNode* t) {
+        return acc + name_of(t).size() +
                static_cast<std::size_t>(t->parent_ != nullptr);
       });
 
-  out.resize_and_overwrite(total, [this](char* data, std::size_t size) {
-    // This is so janky, but it is the price you pay to avoid allocations.
-    //
-    // We make _another_ scan through the directory nodes (hopefully they're
-    // all in-cache), and we write data in reverse order.
+  // This is so janky, but it is the price you pay to avoid allocations.
+  //
+  // We make _another_ scan through the directory nodes (hopefully they're
+  // all in-cache), and we write data in reverse order.
+  const auto write = [this, &name_of](char* data, std::size_t size) {
     char* cursor = data + size;
     for (const DirNode* t : Parents()) {
-      cursor -= t->name_.size();
-      std::copy_n(t->name_.data(), t->name_.size(), cursor);
+      const std::string_view name = name_of(t);
+      cursor -= name.size();
+      std::copy_n(name.data(), name.size(), cursor);
       if (t->parent_ != nullptr) {
         *--cursor = '/';
       }
     }
     return size;
-  });
+  };
+  out.resize_and_overwrite(total, write);
   return out.c_str();
 }
 
-auto DirNode::Open(std::string& path_buf) noexcept
+auto DirNode::Open(std::string& scratch, const cutils::os::Fd* root) noexcept
     -> std::expected<void, cutils::os::OpenError> {
   if (fd_.IsOpen()) {
     return {};
   }
 
-  auto opened = OpenLong(PathInto(path_buf),
+  auto opened = OpenLong(root, PathInto(scratch, root != nullptr ? "." : ""),
                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (!opened) {
     return std::unexpected(opened.error());
@@ -111,11 +126,13 @@ auto DirNode::Open(std::string& path_buf) noexcept
   return {};
 }
 
-auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
-  const char* const c_path = PathInto(scratch);
+auto DirNode::RemoveEmpty(std::string& scratch,
+                          const cutils::os::Fd* root) const noexcept -> int {
+  const char* const c_path = PathInto(scratch, root != nullptr ? "." : "");
   const std::string_view path = scratch;
   if (path.size() < PATH_MAX) {
-    return cutils::os::rmdir(c_path);
+    return root != nullptr ? cutils::os::unlinkat(*root, c_path, AT_REMOVEDIR)
+                           : cutils::os::rmdir(c_path);
   }
 
   // Too long for rmdir: remove it relative to its parent instead.
@@ -124,7 +141,7 @@ auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
     errno = ENAMETOOLONG;
     return -1;
   }
-  const auto parent = OpenLong(std::string_view{c_path, slash},
+  const auto parent = OpenLong(root, std::string_view{c_path, slash},
                                O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (!parent) {
     errno = static_cast<int>(parent.error().code);

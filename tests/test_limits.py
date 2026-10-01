@@ -1,6 +1,7 @@
 """Resource limits: file-descriptor starvation and paths longer than PATH_MAX."""
 
 import os
+import sys
 from pathlib import Path
 
 import fstree
@@ -69,6 +70,25 @@ def test_unsearchable_dirs_under_tight_fd_limit(run: Runner, workdir: Path, fd_l
         assert fstree.listing(workdir) == (
             {"d"} | {f"d/s{i}" for i in range(n)} | {f"d/s{i}/t" for i in range(n)} | {f"d/s{i}/t/u" for i in range(n)}
         )
+
+
+# On Linux, rmdir("l/") fails with ENOTDIR on the link itself, as it does for GNU rm.
+@pytest.mark.skipif(sys.platform != "darwin", reason="BSD rm's l/ removal is macOS-only")
+def test_symlinked_operand_that_fits_path_max_only_as_typed(run: Runner, workdir: Path, threads: int) -> None:
+    """``l/`` reaches its tree through the link: paths that fit PATH_MAX as typed
+    must not be rebuilt from the target's (longer) absolute path."""
+    name = "s" * 50
+    depth = (PATH_MAX - 16) // (len(name) + 1)
+    fstree.deep_chain(workdir / "t", depth=depth, name=name)
+    assert len(os.fsencode(workdir.resolve() / "t")) + depth * (len(name) + 1) > PATH_MAX
+    (workdir / "l").symlink_to("t")
+
+    res = run("-rf", "l/", threads=threads)
+
+    with check:
+        assert (res.returncode, res.stderr) == (0, ""), res
+    with check:
+        assert fstree.listing(workdir) == {"l"}
 
 
 @pytest.mark.slow
