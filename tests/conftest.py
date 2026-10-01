@@ -28,6 +28,11 @@ def pytest_configure(config: pytest.Config) -> None:
     if plugin := config.pluginmanager.get_plugin("icdiff"):
         config.pluginmanager.unregister(plugin)
         _icdiff = plugin.pytest_assertrepr_compare
+    # Under xdist only the controller sees every case's report.
+    if (out := config.getoption("--parity-report")) and not hasattr(config, "workerinput"):
+        from parity_score import ParityScore
+
+        config.pluginmanager.register(ParityScore(out.resolve()), "parity_score")
 
 
 def _clip(v: object, limit: int = 300) -> str:
@@ -66,6 +71,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--remmy", default=os.environ.get("REMMY_BIN", str(DEFAULT_BIN)), help="remmy executable")
+    parser.addoption("--parity-report", type=Path, help="write the run's BSD rm parity score here as JSON")
     bench = parser.getgroup("bench", "comparison benchmark (tests/bench)")
     bench.addoption("--bench", choices=("demo", "full"), help="run the benchmark with this plan (skipped otherwise)")
     bench.addoption("--bench-out", type=Path, help="results directory (default: tests/bench/out/<plan>-<utc>)")
