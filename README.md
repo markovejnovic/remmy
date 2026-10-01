@@ -138,8 +138,6 @@ is tracked in #40.
 
 `rm -r` walks with `fts(3)`, and a few of its quirks are not copied yet:
 
-- At the root of a mounted volume, `rm` skips the hidden HFS+ metadata
-  entries silently and ends with `Resource busy`; `remmy` prints more errors.
 - An operand `l/`, where `l` is a symlink to `.` or `..`, is walked through
   the link by `rm` and ends in `No such file or directory`.
 

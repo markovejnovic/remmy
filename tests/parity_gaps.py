@@ -67,14 +67,10 @@ GAPS = {
         _OPERAND_ORDER,
     ),
     "walk-semantics": Gap(
-        "fts(3) behaviour inside a walk: names a listing returns that then vanish on open "
-        "(the HFS+ private metadata directories at a volume root) are skipped silently, so a mount point ends with "
-        "only 'Resource busy'; an operand 'l/' with l pointing at '.' or '..' walks through the link and reports the "
-        "final rmdir's ENOENT.",
+        "fts(3) behaviour inside a walk: an operand 'l/' with l pointing at '.' or '..' walks through the link and "
+        "reports the final rmdir's ENOENT.",
         _keys("""
-edges mount_operands r_mountpoint_operand rx_empty_nested_mount
 edges symlinks_to_directories r_symlink_to_dot_slash r_symlink_to_dotdot_slash
-fs mount_points mountpoint_r_no_x x_operand_is_mount
 """),
     ),
     "prompt-interactive": Gap(
@@ -135,7 +131,8 @@ fs permissions file_0444_pty_no file_0444_pty_yes tree_0444_files_r_pty
 cli P_W_x P_f_ro P_ro_devnull P_ro_pty W_dir W_emptystring W_missing W_nonexist Wf_nonexist Wv dW_missing fW_missing
 cli usage_and_getopt all_flags all_flags_valid_no_W
 edges P_and_W P_mode_000 iW_existing iW_missing
-fs mount_points x_mountpoint_r
+edges mount_operands rx_empty_nested_mount
+fs mount_points x_mountpoint_r x_operand_is_mount
 """),
     ),
 }

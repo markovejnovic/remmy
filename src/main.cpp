@@ -160,18 +160,24 @@ class FileUnlinkWorker {
         ctx.Submit(task, kAwaitingDescriptor);
       } else {
         // Like the inline openat failure in Scan: report the directory and
-        // leave it be (-f first tries rmdir, as rm does), or, when its parent
-        // cannot be searched, report that instead. It was never scanned, so
-        // nothing references it; only its parent's count of it is dropped.
+        // leave it be (-f first tries rmdir, as rm does), or, when it is
+        // gone, pass over it, or, when its parent cannot be searched, report
+        // that instead. It was never scanned, so nothing references it; only
+        // its parent's count of it is dropped.
         DirNode* parent = task->parent_;
         const int error = static_cast<int>(err.code);
         const char* path = task->PathInto(path_buffer_);
-        if (error == EACCES && parent != nullptr && Lookup(path) == EACCES) {
+        const int lookup =
+            error == ENOENT || error == EACCES ? Lookup(path) : 0;
+        // Gone, as in Vanished.
+        const bool vanished = error == ENOENT && lookup == ENOENT;
+        if (error == EACCES && lookup == EACCES && parent != nullptr) {
           // Parked straight from the listing of its parent, which then never
           // got to look a name up (see Unsearchable).
           LeaveUnsearchable(parent);
-        } else if (!cli_.Options().force ||
-                   (RemoveEmptyLogged(task) != 0 && errno != ENOENT)) {
+        } else if (!vanished &&
+                   (!cli_.Options().force ||
+                    (RemoveEmptyLogged(task) != 0 && errno != ENOENT))) {
           failures_++;
           WarnAt(cli_.CommandName(), path_buffer_, error);
         }
@@ -197,6 +203,18 @@ class FileUnlinkWorker {
   static auto Lookup(const char* path) noexcept -> int {
     struct stat path_stat;
     return cutils::os::lstat(path, &path_stat) == 0 ? 0 : errno;
+  }
+
+  /// @brief Whether the entry `name` of `task`, which the listing of `task`
+  ///        returned and an open of just failed with ENOENT, is not there
+  ///        to be looked up either: fts passes over such a name without a
+  ///        word, as it passes over the HFS+ private directories at the root
+  ///        of a volume, which a listing returns and a lookup does not find.
+  static auto Vanished(const DirNode* task, const char* name) noexcept -> bool {
+    struct stat entry_stat;
+    return cutils::os::fstatat(task->fd_, name, &entry_stat,
+                               AT_SYMLINK_NOFOLLOW) != 0 &&
+           errno == ENOENT;
   }
 
   /// @brief Whether a failure with `error` on the entry `name` of `task`
@@ -299,6 +317,9 @@ class FileUnlinkWorker {
           child_fd = *std::move(opened);
         } else if (!opened.error().retryable) {
           const int error = static_cast<int>(opened.error().code);
+          if (error == ENOENT && Vanished(task, entry.c_str())) {
+            continue;
+          }
           if (Unsearchable(task, entry.c_str(), error, searchable)) {
             LeaveUnsearchable(task);
             break;
