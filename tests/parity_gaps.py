@@ -67,8 +67,7 @@ GAPS = {
         _OPERAND_ORDER,
     ),
     "walk-semantics": Gap(
-        "fts(3) behaviour inside a walk: a directory that can be listed but not searched (0444) is reported once as "
-        "'<dir>: Permission denied' and neither emptied nor rmdir'd; names a listing returns that then vanish on open "
+        "fts(3) behaviour inside a walk: names a listing returns that then vanish on open "
         "(the HFS+ private metadata directories at a volume root) are skipped silently, so a mount point ends with "
         "only 'Resource busy'; an operand 'l/' with l pointing at '.' or '..' walks through the link and reports the "
         "final rmdir's ENOENT.",
@@ -76,7 +75,6 @@ GAPS = {
 edges mount_operands r_mountpoint_operand rx_empty_nested_mount
 edges symlinks_to_directories r_symlink_to_dot_slash r_symlink_to_dotdot_slash
 fs mount_points mountpoint_r_no_x x_operand_is_mount
-fs permissions r_subdir_0444
 """),
     ),
     "prompt-interactive": Gap(
