@@ -1,5 +1,7 @@
 // See LICENSE in the repository root.
 
+#include <sys/resource.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -11,6 +13,7 @@
 #include <memory>
 #include <semaphore>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -125,6 +128,30 @@ struct StealingWork {
     }
   }
 };
+
+/// Task 0 sleeps; every other task returns at once, leaving its worker idle.
+struct OneSlowTask {
+  using task_type = int;
+
+  static constexpr auto kSlow = std::chrono::milliseconds(300);
+
+  void Process(task_type task, auto&) noexcept {
+    if (task == 0) {
+      std::this_thread::sleep_for(kSlow);
+    }
+  }
+};
+
+/// CPU time this process has used so far, user plus system.
+auto ProcessCpuTime() -> std::chrono::microseconds {
+  rusage usage{};
+  REQUIRE(::getrusage(RUSAGE_SELF, &usage) == 0);
+  const auto micros = [](const timeval& tv) {
+    return std::chrono::seconds(tv.tv_sec) +
+           std::chrono::microseconds(tv.tv_usec);
+  };
+  return micros(usage.ru_utime) + micros(usage.ru_stime);
+}
 
 /// Logs the order tasks are selected in; the root submits one task at each
 /// priority, demoted first.
@@ -280,6 +307,28 @@ SCENARIO("A worker prefers urgent work over demoted work", "[task_scheduler]") {
         const auto& worker = *executor.Workers().begin();
         REQUIRE(worker.count == 3);
         REQUIRE(worker.selected == std::array{0, 2, 1});
+      }
+    }
+  }
+}
+
+SCENARIO("Idle workers sleep instead of spinning", "[task_scheduler]") {
+  GIVEN("eight workers, one slow task and seven that finish at once") {
+    constexpr int kTasks = 8;
+    cutils::TaskScheduler<OneSlowTask> executor(kTasks);
+
+    WHEN("all of them are submitted and the scheduler is waited on") {
+      const auto before = ProcessCpuTime();
+      for (int task = 0; task < kTasks; ++task) {
+        REQUIRE(executor.Submit(task));
+      }
+      executor.Wait();
+      const auto used = ProcessCpuTime() - before;
+      CAPTURE(used.count());
+
+      THEN("the idle workers burned far less CPU than spinning would") {
+        // Seven spinning workers would burn about 7 x 300 ms of CPU.
+        REQUIRE(used < OneSlowTask::kSlow * 2);
       }
     }
   }

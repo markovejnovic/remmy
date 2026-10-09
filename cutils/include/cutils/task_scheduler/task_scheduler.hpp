@@ -26,6 +26,7 @@
 #include <atomic>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <cutils/collections/heap_array.hpp>
 #include <cutils/concepts.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
@@ -149,6 +150,7 @@ class TaskScheduler {
     }
     activity_.pending_tasks_.fetch_add(1, std::memory_order_relaxed);
     submitted_[priority].Insert(task);
+    Publish();
 
     MaybeGrowThreads();
     return true;
@@ -209,12 +211,25 @@ class TaskScheduler {
               std::size_t priority) noexcept {
     activity_.pending_tasks_.fetch_add(1, std::memory_order_relaxed);
     slot.queues[priority].Insert(task);
+    Publish();
     MaybeGrowThreads();
+  }
+
+  /// @brief Wake a parked worker: a task was just inserted.
+  ///
+  /// Must follow the insert, so that a worker which looked at the queues before
+  /// it either finds the task on its next look or sees the epoch move.
+  void Publish() noexcept {
+    activity_.work_epoch_.fetch_add(1, std::memory_order_release);
+    activity_.work_epoch_.notify_one();
   }
 
   /// @brief Send a stop signal to all the threads and wait for them to finish.
   void StopAndJoinThreads() {
     activity_.stop_.store(true, std::memory_order_relaxed);
+    // Parked workers only look at stop_ once the epoch moves.
+    activity_.work_epoch_.fetch_add(1, std::memory_order_release);
+    activity_.work_epoch_.notify_all();
     for (auto& slot : slots_) {
       if (slot.thread.joinable()) {
         slot.thread.join();
@@ -289,10 +304,18 @@ class TaskScheduler {
         return;
       }
 
+      // Read before looking for work: a task published after the look moves
+      // the epoch, so the wait below returns at once instead of missing it.
+      const auto epoch = activity_.work_epoch_.load(std::memory_order_acquire);
       [[maybe_unused]] auto [task, taken_priority] = AcquireNextTask(self);
 
       if (!task) {
-        std::this_thread::yield();
+        // Park instead of spinning: an idle worker would otherwise keep a core
+        // busy (and possibly a performance core the busy workers need).
+        if (activity_.stop_.load(std::memory_order_relaxed)) {
+          return;
+        }
+        activity_.work_epoch_.wait(epoch, std::memory_order_acquire);
         continue;
       }
 
@@ -320,6 +343,10 @@ class TaskScheduler {
 
     /// @brief The total number of threads that are currently alive.
     std::atomic<std::size_t> live_threads_{0};
+
+    /// @brief Bumped after every task insert and on stop; idle workers sleep
+    ///        on it until it moves.
+    std::atomic<std::uint32_t> work_epoch_{0};
   } activity_;
 
   const std::size_t max_workers_;
