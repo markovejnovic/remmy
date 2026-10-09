@@ -76,6 +76,13 @@ using RawDirent = ::dirent64;
 
 auto GetEUid() noexcept -> ::uid_t;
 
+/// @brief How many CPUs of the fastest kind this machine has.
+///
+/// On Apple silicon that is the performance cores (`hw.perflevel0.logicalcpu`),
+/// not the efficiency cores `hardware_concurrency` also counts. Elsewhere, and
+/// when the sysctl is missing, it is every CPU. Never less than 1.
+[[nodiscard]] auto PerformanceCores() noexcept -> unsigned;
+
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {
   return ::lstat(path, out);
 }
