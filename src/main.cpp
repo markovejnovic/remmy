@@ -79,10 +79,12 @@
 
 #include "cli.hpp"
 #include "dir_node.hpp"
+#include "name_batch.hpp"
 
 namespace {
 
 using remmy::DirNode;
+using remmy::NameBatch;
 
 static auto ThreadCount() -> std::uint16_t {
   static constexpr const char* kEnvThreadsName = "REMMY_THREADS";
@@ -216,6 +218,7 @@ class FileUnlinkWorker {
       }
 
       bool is_dir = entry.is_directory();
+      std::uint64_t ino = entry.ino();
       if (entry.is_type_unknown()) {
         // Some filesystems don't populate d_type; fall back to fstatat.
         struct stat st;
@@ -229,16 +232,13 @@ class FileUnlinkWorker {
           continue;
         }
         is_dir = S_ISDIR(st.st_mode);
+        ino = st.st_ino;
       }
 
       if (!is_dir) {
-        if (LogIfRemoved(cli_, stdout_,
-                         cutils::os::unlinkat(task->fd_, entry.c_str(), 0),
-                         "{}/{}", dir_path, entry.name()) != 0 &&
-            errno != ENOENT) {
-          failures_++;
-          WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), entry.name(),
-                 errno);
+        files_.Add(ino, entry.name());
+        if (files_.size() >= kUnlinkBatch) {
+          UnlinkFiles(task, dir_path);
         }
         continue;
       }
@@ -281,6 +281,33 @@ class FileUnlinkWorker {
       // node is freed by whichever worker drops its last reference in Finish.
       ctx.Submit(child, tier);
     }
+
+    UnlinkFiles(task, dir_path);
+  }
+
+  /// @brief How many file names a scan collects before unlinking them.
+  ///
+  /// Bigger batches sort into longer runs of neighbouring inodes; 16k names
+  /// are a few hundred KiB.
+  static constexpr std::size_t kUnlinkBatch = 16UZ * 1024UZ;
+
+  /// @brief Unlink the collected files of `task`, in inode order.
+  ///
+  /// Under -v they stay in directory order, the order rm lists them in.
+  void UnlinkFiles(const DirNode* task, std::string_view dir_path) noexcept {
+    if (!cli_.Options().verbose) {
+      files_.SortByInode();
+    }
+    for (const NameBatch::Entry& file : files_.Entries()) {
+      const char* name = files_.Name(file);
+      if (LogIfRemoved(cli_, stdout_, cutils::os::unlinkat(task->fd_, name, 0),
+                       "{}/{}", dir_path, std::string_view{name}) != 0 &&
+          errno != ENOENT) {
+        failures_++;
+        WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), name, errno);
+      }
+    }
+    files_.Clear();
   }
 
   auto RemoveEmptyLogged(const DirNode* node) noexcept -> int {
@@ -333,6 +360,10 @@ class FileUnlinkWorker {
   /// @brief Thread-local buffer holding the path of the directory being
   ///        scanned, for -v's lines about its entries.
   std::string scan_path_;
+
+  /// @brief Thread-local batch of the scanned directory's files, unlinked in
+  ///        inode order.
+  NameBatch files_;
 };
 
 using Scheduler =

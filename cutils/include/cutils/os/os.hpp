@@ -145,6 +145,10 @@ class DirEntry {
 #endif
   }
 
+  [[nodiscard]] auto ino() const noexcept -> std::uint64_t {
+    return raw_->d_ino;
+  }
+
   [[nodiscard]] auto type() const noexcept -> std::uint8_t {
     return raw_->d_type;
   }
