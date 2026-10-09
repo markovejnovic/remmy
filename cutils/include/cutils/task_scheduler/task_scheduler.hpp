@@ -13,6 +13,9 @@
 ///   - An [`IsWorker::task_type`] is a task that is injected into each worker,
 ///     when the previous worker finishes operation on a previous task.
 ///
+/// A worker may also define `void OnThreadStart() noexcept`, which its thread
+/// calls once before taking any task, e.g. to set thread attributes.
+///
 /// This scheduler holds tasks in a work-stealing queue and each worker first
 /// exhausts its own tasks, and then, when it's out of tasks to execute, tries
 /// to steal elements from other workers' queues.
@@ -297,6 +300,9 @@ class TaskScheduler {
 
   /// @brief The core loop that a worker executes.
   void WorkerLoop(Slot& self) noexcept {
+    if constexpr (requires { self.worker.OnThreadStart(); }) {
+      self.worker.OnThreadStart();
+    }
     ContextType context(*this, self);
 
     while (true) {

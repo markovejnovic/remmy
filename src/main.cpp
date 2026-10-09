@@ -149,6 +149,16 @@ class FileUnlinkWorker {
     return failures_;
   }
 
+  /// @brief Called once on each worker thread before it takes a task.
+  ///
+  /// Workers would otherwise run at the default QoS, below the main thread,
+  /// where macOS may put them on efficiency cores. Under APFS's tree lock the
+  /// whole run waits on whichever thread holds it, so that thread should run
+  /// on a fast core.
+  static void OnThreadStart() noexcept {
+    cutils::os::MarkThreadUserInitiated();
+  }
+
   /// @brief The main entry-point the scheduler invokes for this task.
   ///
   /// This function is called by the scheduler periodically as new tasks are
