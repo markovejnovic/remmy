@@ -142,6 +142,26 @@ struct OneSlowTask {
   }
 };
 
+/// Counts thread starts, and tasks a thread ran before its own start hook.
+struct StartHookWork {
+  using task_type = int;
+
+  std::atomic<unsigned>* starts;
+  std::atomic<unsigned>* early;
+  bool started = false;
+
+  void OnThreadStart() noexcept {
+    started = true;
+    starts->fetch_add(1, std::memory_order_relaxed);
+  }
+
+  void Process(task_type, auto&) noexcept {
+    if (!started) {
+      early->fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+};
+
 /// CPU time this process has used so far, user plus system.
 auto ProcessCpuTime() -> std::chrono::microseconds {
   rusage usage{};
@@ -329,6 +349,31 @@ SCENARIO("Idle workers sleep instead of spinning", "[task_scheduler]") {
       THEN("the idle workers burned far less CPU than spinning would") {
         // Seven spinning workers would burn about 7 x 300 ms of CPU.
         REQUIRE(used < OneSlowTask::kSlow * 2);
+      }
+    }
+  }
+}
+
+SCENARIO("A worker's thread start hook runs once before its tasks",
+         "[task_scheduler]") {
+  GIVEN("a four-worker scheduler whose workers count their thread starts") {
+    std::atomic<unsigned> starts{0};
+    std::atomic<unsigned> early{0};
+    cutils::TaskScheduler executor(4, StartHookWork{&starts, &early});
+
+    WHEN("many tasks are submitted and the scheduler is waited on") {
+      constexpr int kTasks = 1024;
+      for (int task = 0; task < kTasks; ++task) {
+        REQUIRE(executor.Submit(task));
+      }
+      executor.Wait();
+
+      THEN("each started thread ran the hook once, before any task") {
+        const auto hooked = std::ranges::count_if(
+            executor.Workers(), [](const auto& w) { return w.started; });
+        REQUIRE(starts.load() == static_cast<unsigned>(hooked));
+        REQUIRE(starts.load() >= 1);
+        REQUIRE(early.load() == 0);
       }
     }
   }
