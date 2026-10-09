@@ -69,6 +69,18 @@ def test_many_scattered_failures_all_reported(run: Runner, workdir: Path, thread
         check.is_false(fstree.exists(workdir / f"t/d{i}/free"))
 
 
+def test_unwritable_wide_directory_reports_every_file(run: Runner, workdir: Path, threads: int) -> None:
+    # Wide enough that remmy splits its files into chunks other workers unlink.
+    names = [f"f{i}" for i in range(1000)]
+    fstree.build(workdir, {"t": {"frozen": dict.fromkeys(names, ""), "gone": ""}})
+    with fstree.chmod(workdir / "t/frozen", 0o555):
+        res = run("-r", "t", threads=threads)
+    check.equal(res.returncode, 1, res)
+    check.equal(fstree.listing(workdir), {"t", "t/frozen", *(f"t/frozen/{n}" for n in names)})
+    for n in names:
+        check.equal(res.stderr.count(f"t/frozen/{n}: {DENIED}"), 1, n)
+
+
 def test_unremovable_operand_does_not_affect_other_operands(run: Runner, workdir: Path, threads: int) -> None:
     fstree.build(workdir, {"bad": {"locked": {"x": ""}}, "good1": {"a": {"b": ""}}, "good2": ""})
     with fstree.chmod(workdir / "bad/locked", 0o000):
