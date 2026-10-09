@@ -1,0 +1,247 @@
+trace: remmy-4thread-linux-repo.trace
+kernel: kernel.release.t8132 815C54ED-2B20-3364-B78C-B87C506D28C6
+dSYM: /Library/Developer/KDKs/KDK_27.0_26A428.kdk/System/Library/Kernels/kernel.release.t8132.dSYM/Contents/Resources/DWARF/kernel.release.t8132
+slide 0x4924000 (agreed by 68 of 68 named kernel functions); __TEXT_EXEC runtime base 0xfffffe000bc2c000
+kernel frames symbolicated: 288 of 288 unique raw addresses
+total sampled time: 15946.6 ms
+
+== time by thread state
+  15946.6 ms  Running
+
+== time by thread
+   3379.1 ms  remmy (0x1107383)
+   3337.5 ms  remmy (0x1107382)
+   3307.8 ms  remmy (0x1107384)
+   3307.0 ms  remmy (0x1107381)
+   2615.2 ms  Main Thread (0x1107375)
+
+== top 25 functions by self time
+   5133.0 ms  32.2%  __unlinkat [libsystem_kernel.dylib]
+   2605.2 ms  16.3%  ulock_wait_continue [kernel.t8132]
+   1830.0 ms  11.5%  thread_block_reason [kernel.t8132]
+    835.0 ms   5.2%  lck_rw_grab [kernel.t8132]
+    348.0 ms   2.2%  __rmdir [libsystem_kernel.dylib]
+    320.0 ms   2.0%  eval [com.apple.security.sandbox]
+    220.0 ms   1.4%  obj_get [apfs]
+    210.0 ms   1.3%  IORWLockUnlock [kernel.t8132]
+    180.0 ms   1.1%  IORWLockRead [kernel.t8132]
+    145.0 ms   0.9%  apfs_key_compare [apfs]
+    145.0 ms   0.9%  btree_node_key_ptr [apfs]
+    140.0 ms   0.9%  lck_rw_drain_status [kernel.t8132]
+    132.0 ms   0.8%  __openat [libsystem_kernel.dylib]
+    120.0 ms   0.8%  sb_fsa_evaluate [com.apple.security.sandbox]
+    115.0 ms   0.7%  bt_search_node_insert [apfs]
+    111.0 ms   0.7%  __getdirentries64 [libsystem_kernel.dylib]
+    100.0 ms   0.6%  object_in_jhash [apfs]
+    100.0 ms   0.6%  storage_class_cache_invalidate_all_with_callback [com.apple.security.sandbox]
+     80.0 ms   0.5%  nextBaseAndAnyMarks [kernel.t8132]
+     80.0 ms   0.5%  kern_apfs_reflock_try_get_ref [kernel.t8132]
+     70.0 ms   0.4%  zfree_ext [kernel.t8132]
+     70.0 ms   0.4%  memcmp_zero_ptr_aligned [kernel.t8132]
+     65.0 ms   0.4%  kern_apfs_reflock_try_put_ref [kernel.t8132]
+     65.0 ms   0.4%  memcpy [kernel.t8132]
+     60.0 ms   0.4%  waitq_select_queue_flush [kernel.t8132]
+
+== top 25 functions by inclusive time
+  13056.0 ms  81.9%  thread_start [libsystem_pthread.dylib]
+  13036.0 ms  81.7%  execute_native_thread_routine [remmy]
+  13036.0 ms  81.7%  _pthread_start [libsystem_pthread.dylib]
+  11624.5 ms  72.9%  __unlinkat [libsystem_kernel.dylib]
+   7811.0 ms  49.0%  std::thread::_State_impl<std::thread::_Invoker<std::tuple<cutils::TaskScheduler<(anonymous namespace)::FileUnlinkWorker, 2ul, std::allocator<std::byte>>::MaybeGrowThreads()::'lambda'()>>>::_M_run() [remmy]
+   7500.0 ms  47.0%  sleh_synchronous [kernel.t8132]
+   7500.0 ms  47.0%  fleh_synchronous [kernel.t8132]
+   7485.0 ms  46.9%  unix_syscall [kernel.t8132]
+   6670.1 ms  41.8%  unlinkat_internal [kernel.t8132]
+   4529.9 ms  28.4%  VNOP_REMOVE [kernel.t8132]
+   4519.9 ms  28.3%  apfs_vnop_remove [apfs]
+   3136.8 ms  19.7%  fs_delete_inode_internal [apfs]
+   2608.2 ms  16.4%  start [dyld]
+   2605.2 ms  16.3%  (anonymous namespace)::RunRm(remmy::Cli const&) [remmy]
+   2605.2 ms  16.3%  std::__detail::__wait_impl(void const*, std::__detail::__wait_args_base&) [remmy]
+   2605.2 ms  16.3%  ulock_wait_continue [kernel.t8132]
+   2605.2 ms  16.3%  ull_put [kernel.t8132]
+   2605.2 ms  16.3%  main [remmy]
+   2605.2 ms  16.3%  __ulock_wait [libsystem_kernel.dylib]
+   2571.0 ms  16.1%  create_or_modify_jobj [apfs]
+   2514.3 ms  15.8%  decrement_dstream_id_for_deletion_ex [apfs]
+   2279.8 ms  14.3%  bt_remove_internal [apfs]
+   2168.8 ms  13.6%  remove_jobj [apfs]
+   1840.0 ms  11.5%  thread_block_reason [kernel.t8132]
+   1694.9 ms  10.6%  do_iterative_file_extent_removal [apfs]
+
+== heaviest 15 stacks (leaf first, 12 frames)
+   5113.0 ms  32.1%
+      __unlinkat [libsystem_kernel.dylib]
+      execute_native_thread_routine [remmy]
+      _pthread_start [libsystem_pthread.dylib]
+      thread_start [libsystem_pthread.dylib]
+
+   2605.2 ms  16.3%
+      ulock_wait_continue [kernel.t8132]
+      ull_put [kernel.t8132]
+      __ulock_wait [libsystem_kernel.dylib]
+      std::__detail::__wait_impl(void const*, std::__detail::__wait_args_base&) [remmy]
+      (anonymous namespace)::RunRm(remmy::Cli const&) [remmy]
+      main [remmy]
+      start [dyld]
+
+    355.7 ms   2.2%
+      thread_block_reason [kernel.t8132]
+      lck_mtx_sleep [kernel.t8132]
+      _sleep [kernel.t8132]
+      tm_cv_wait [apfs]
+      tx_enter_internal [apfs]
+      fs_tx_enter_internal [apfs]
+      apfs_vnop_remove [apfs]
+      VNOP_REMOVE [kernel.t8132]
+      unlinkat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+      sleh_synchronous [kernel.t8132]
+      fleh_synchronous [kernel.t8132]
+
+    347.0 ms   2.2%
+      __rmdir [libsystem_kernel.dylib]
+      std::thread::_State_impl<std::thread::_Invoker<std::tuple<cutils::TaskScheduler<(anonymous namespace)::FileUnlinkWorker, 2ul, std::allocator<std::byte>>::MaybeGrowThreads()::'lambda'()>>>::_M_run() [remmy]
+      execute_native_thread_routine [remmy]
+      _pthread_start [libsystem_pthread.dylib]
+      thread_start [libsystem_pthread.dylib]
+
+    191.7 ms   1.2%
+      thread_block_reason [kernel.t8132]
+      lck_rw_lock_exclusive_gen [kernel.t8132]
+      IORWLockWrite [kernel.t8132]
+      bt_remove_internal [apfs]
+      create_or_modify_jobj [apfs]
+      remove_jobj [apfs]
+      remove_dir_entry_ext [apfs]
+      apfs_vnop_remove [apfs]
+      VNOP_REMOVE [kernel.t8132]
+      unlinkat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+      sleh_synchronous [kernel.t8132]
+
+    183.8 ms   1.2%
+      thread_block_reason [kernel.t8132]
+      lck_mtx_sleep [kernel.t8132]
+      _sleep [kernel.t8132]
+      buf_biowait [kernel.t8132]
+      nx_buf_bread [apfs]
+      _vnode_dev_read [apfs]
+      obj_read [apfs]
+      obj_get [apfs]
+      btree_node_get [apfs]
+      bt_lookup_internal [apfs]
+      bt_iterate_lookup [apfs]
+      bt_iterate_per_node [apfs]
+
+    160.0 ms   1.0%
+      eval [com.apple.security.sandbox]
+      _get_static_storage_class [com.apple.security.sandbox]
+      _derive_vnode_storage_class [com.apple.security.sandbox]
+      derive_vnode_storage_class [com.apple.security.sandbox]
+      eval [com.apple.security.sandbox]
+      sb_evaluate_internal [com.apple.security.sandbox]
+      hook_vnode_check_unlink [com.apple.security.sandbox]
+      mac_vnode_check_unlink [kernel.t8132]
+      vn_authorize_unlink [kernel.t8132]
+      unlinkat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+      sleh_synchronous [kernel.t8132]
+
+    149.9 ms   0.9%
+      thread_block_reason [kernel.t8132]
+      lck_mtx_sleep [kernel.t8132]
+      _sleep [kernel.t8132]
+      buf_biowait [kernel.t8132]
+      nx_buf_bread [apfs]
+      _vnode_dev_read [apfs]
+      obj_read [apfs]
+      obj_get [apfs]
+      btree_node_get [apfs]
+      bt_merge_nodes [apfs]
+      bt_merge_up [apfs]
+      bt_remove_internal [apfs]
+
+    130.0 ms   0.8%
+      eval [com.apple.security.sandbox]
+      sb_evaluate_internal [com.apple.security.sandbox]
+      hook_vnode_check_unlink [com.apple.security.sandbox]
+      mac_vnode_check_unlink [kernel.t8132]
+      vn_authorize_unlink [kernel.t8132]
+      unlinkat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+      sleh_synchronous [kernel.t8132]
+      fleh_synchronous [kernel.t8132]
+      __unlinkat [libsystem_kernel.dylib]
+      std::thread::_State_impl<std::thread::_Invoker<std::tuple<cutils::TaskScheduler<(anonymous namespace)::FileUnlinkWorker, 2ul, std::allocator<std::byte>>::MaybeGrowThreads()::'lambda'()>>>::_M_run() [remmy]
+      execute_native_thread_routine [remmy]
+
+    130.0 ms   0.8%
+      lck_rw_grab [kernel.t8132]
+      lck_rw_lock_exclusive_gen [kernel.t8132]
+      IORWLockWrite [kernel.t8132]
+      bt_remove_internal [apfs]
+      create_or_modify_jobj [apfs]
+      remove_jobj [apfs]
+      decrement_dstream_id_for_deletion_ex [apfs]
+      fs_delete_inode_internal [apfs]
+      apfs_vnop_remove [apfs]
+      VNOP_REMOVE [kernel.t8132]
+      unlinkat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+
+    127.0 ms   0.8%
+      __openat [libsystem_kernel.dylib]
+      std::thread::_State_impl<std::thread::_Invoker<std::tuple<cutils::TaskScheduler<(anonymous namespace)::FileUnlinkWorker, 2ul, std::allocator<std::byte>>::MaybeGrowThreads()::'lambda'()>>>::_M_run() [remmy]
+      execute_native_thread_routine [remmy]
+      _pthread_start [libsystem_pthread.dylib]
+      thread_start [libsystem_pthread.dylib]
+
+    115.0 ms   0.7%
+      lck_rw_grab [kernel.t8132]
+      lck_rw_lock_exclusive_gen [kernel.t8132]
+      IORWLockWrite [kernel.t8132]
+      bt_remove_internal [apfs]
+      create_or_modify_jobj [apfs]
+      remove_jobj [apfs]
+      remove_dir_entry_ext [apfs]
+      apfs_vnop_remove [apfs]
+      VNOP_REMOVE [kernel.t8132]
+      unlinkat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+      sleh_synchronous [kernel.t8132]
+
+    112.2 ms   0.7%
+      thread_block_reason [kernel.t8132]
+      lck_rw_lock_exclusive_gen [kernel.t8132]
+      IORWLockWrite [kernel.t8132]
+      bt_remove_internal [apfs]
+      create_or_modify_jobj [apfs]
+      remove_jobj [apfs]
+      decrement_dstream_id_for_deletion_ex [apfs]
+      fs_delete_inode_internal [apfs]
+      apfs_vnop_remove [apfs]
+      VNOP_REMOVE [kernel.t8132]
+      unlinkat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+
+    104.0 ms   0.7%
+      __getdirentries64 [libsystem_kernel.dylib]
+      execute_native_thread_routine [remmy]
+      _pthread_start [libsystem_pthread.dylib]
+      thread_start [libsystem_pthread.dylib]
+
+    100.0 ms   0.6%
+      storage_class_cache_invalidate_all_with_callback [com.apple.security.sandbox]
+      hook_vnode_notify_unlink [com.apple.security.sandbox]
+      mac_vnode_notify_unlink [kernel.t8132]
+      rmdirat_internal [kernel.t8132]
+      unix_syscall [kernel.t8132]
+      sleh_synchronous [kernel.t8132]
+      fleh_synchronous [kernel.t8132]
+      __rmdir [libsystem_kernel.dylib]
+      rmdir [libsystem_kernel.dylib]
+      std::thread::_State_impl<std::thread::_Invoker<std::tuple<cutils::TaskScheduler<(anonymous namespace)::FileUnlinkWorker, 2ul, std::allocator<std::byte>>::MaybeGrowThreads()::'lambda'()>>>::_M_run() [remmy]
+      execute_native_thread_routine [remmy]
+      _pthread_start [libsystem_pthread.dylib]
+
