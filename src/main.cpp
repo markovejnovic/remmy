@@ -80,11 +80,14 @@
 #include "cli.hpp"
 #include "dir_node.hpp"
 #include "name_batch.hpp"
+#include "task.hpp"
 
 namespace {
 
 using remmy::DirNode;
 using remmy::NameBatch;
+using remmy::Task;
+using remmy::UnlinkChunk;
 
 static auto ThreadCount() -> std::uint16_t {
   static constexpr const char* kEnvThreadsName = "REMMY_THREADS";
@@ -134,7 +137,7 @@ auto LogIfRemoved(const remmy::Cli& cli, cutils::io::StdoutWriter& out,
 /// I've written will inject new tasks via [`Process`].
 class FileUnlinkWorker {
  public:
-  using task_type = DirNode*;
+  using task_type = Task;
 
   static constexpr std::size_t kRunnable = 0;
   static constexpr std::size_t kAwaitingDescriptor = 1;
@@ -165,14 +168,20 @@ class FileUnlinkWorker {
   ///
   /// This function is called by the scheduler periodically as new tasks are
   /// admitted into the scheduler.
-  void Process(DirNode* task, auto& ctx) noexcept {
+  void Process(Task work, auto& ctx) noexcept {
+    if (UnlinkChunk* chunk = work.AsUnlink()) {
+      UnlinkChunkFiles(chunk);
+      return;
+    }
+
+    DirNode* task = work.AsScan();
     auto open_result = task->Open(path_buffer_);
     if (!open_result) {
       const cutils::os::OpenError err = open_result.error();
       if (err.retryable) {
         // Out of descriptors, but one of ours is or will be freed: park the
         // directory and retry it later.
-        ctx.Submit(task, kAwaitingDescriptor);
+        ctx.Submit(Task::Scan(task), kAwaitingDescriptor);
       } else {
         if (!cli_.Options().force ||
             (RemoveEmptyLogged(task) != 0 && errno != ENOENT)) {
@@ -191,15 +200,21 @@ class FileUnlinkWorker {
       return;
     }
 
-    Scan(task, ctx);
-    task->fd_.Close();
+    // Chunks handed to other workers still unlink through the descriptor; the
+    // last of them to finish frees the node, which closes it.
+    if (!Scan(task, ctx)) {
+      task->fd_.Close();
+    }
 
     MaybeCleanupDirNode(task);
   }
 
  private:
   /// @brief Scan through the given directory.
-  void Scan(DirNode* task, auto& ctx) noexcept {
+  ///
+  /// @return Whether it handed chunks of its files to other workers.
+  auto Scan(DirNode* task, auto& ctx) noexcept -> bool {
+    bool handed_off = false;
     // Entries are logged as "<dir>/<name>", fts's path for them.
     const std::string_view dir_path =
         cli_.Options().verbose ? task->PathInto(scan_path_) : "";
@@ -238,7 +253,7 @@ class FileUnlinkWorker {
       if (!is_dir) {
         files_.Add(ino, entry.name());
         if (files_.size() >= kUnlinkBatch) {
-          UnlinkFiles(task, dir_path);
+          handed_off |= UnlinkFiles(task, dir_path, ctx);
         }
         continue;
       }
@@ -279,10 +294,11 @@ class FileUnlinkWorker {
       // The scheduler carries raw pointers (its slots are trivially copyable
       // and a steal may briefly duplicate one), so ownership is manual: the
       // node is freed by whichever worker drops its last reference in Finish.
-      ctx.Submit(child, tier);
+      ctx.Submit(Task::Scan(child), tier);
     }
 
-    UnlinkFiles(task, dir_path);
+    handed_off |= UnlinkFiles(task, dir_path, ctx);
+    return handed_off;
   }
 
   /// @brief How many file names a scan collects before unlinking them.
@@ -291,23 +307,66 @@ class FileUnlinkWorker {
   /// are a few hundred KiB.
   static constexpr std::size_t kUnlinkBatch = 16UZ * 1024UZ;
 
+  /// @brief How many files an unlink chunk holds.
+  ///
+  /// Small enough to spread a large directory across every worker, large
+  /// enough that the chunk's allocation and queueing stay negligible.
+  static constexpr std::size_t kUnlinkChunk = 256;
+
   /// @brief Unlink the collected files of `task`, in inode order.
   ///
-  /// Under -v they stay in directory order, the order rm lists them in.
-  void UnlinkFiles(const DirNode* task, std::string_view dir_path) noexcept {
+  /// Past one chunk's worth, all but the last chunk go to the queue for other
+  /// workers; each is a contiguous run of inodes, so workers stay in separate
+  /// parts of the volume's B-tree. Under -v they stay in directory order, the
+  /// order rm lists them in, all on this thread.
+  ///
+  /// @return Whether any chunk was handed off.
+  auto UnlinkFiles(DirNode* task, std::string_view dir_path, auto& ctx) noexcept
+      -> bool {
+    bool handed_off = false;
+    std::span<const NameBatch::Entry> rest = files_.Entries();
     if (!cli_.Options().verbose) {
       files_.SortByInode();
+      rest = files_.Entries();
+      while (rest.size() > kUnlinkChunk) {
+        auto* chunk = new UnlinkChunk{.dir = task, .files = {}};
+        for (const NameBatch::Entry& file : rest.first(kUnlinkChunk)) {
+          chunk->files.Add(file.ino, files_.Name(file));
+        }
+        // Counted before it is published, like a subdirectory: the scan's own
+        // reference keeps the count from reaching zero before then.
+        task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
+        ctx.Submit(Task::Unlink(chunk), kRunnable);
+        rest = rest.subspan(kUnlinkChunk);
+        handed_off = true;
+      }
     }
-    for (const NameBatch::Entry& file : files_.Entries()) {
-      const char* name = files_.Name(file);
-      if (LogIfRemoved(cli_, stdout_, cutils::os::unlinkat(task->fd_, name, 0),
+    UnlinkNames(task, files_, rest, dir_path);
+    files_.Clear();
+    return handed_off;
+  }
+
+  /// @brief Unlink a chunk handed off by another worker's scan.
+  void UnlinkChunkFiles(UnlinkChunk* chunk) noexcept {
+    DirNode* dir = chunk->dir;
+    UnlinkNames(dir, chunk->files, chunk->files.Entries(), "");
+    delete chunk;
+    MaybeCleanupDirNode(dir);
+  }
+
+  /// @brief Unlink `entries` of `names` from `dir`.
+  void UnlinkNames(const DirNode* dir, const NameBatch& names,
+                   std::span<const NameBatch::Entry> entries,
+                   std::string_view dir_path) noexcept {
+    for (const NameBatch::Entry& file : entries) {
+      const char* name = names.Name(file);
+      if (LogIfRemoved(cli_, stdout_, cutils::os::unlinkat(dir->fd_, name, 0),
                        "{}/{}", dir_path, std::string_view{name}) != 0 &&
           errno != ENOENT) {
         failures_++;
-        WarnAt(cli_.CommandName(), task->PathInto(path_buffer_), name, errno);
+        WarnAt(cli_.CommandName(), dir->PathInto(path_buffer_), name, errno);
       }
     }
-    files_.Clear();
   }
 
   auto RemoveEmptyLogged(const DirNode* node) noexcept -> int {
@@ -326,11 +385,14 @@ class FileUnlinkWorker {
       DirNode* current = *it;
       ++it;
 
+      // acq_rel rather than release plus an acquire fence: same ordering,
+      // but ThreadSanitizer can see it. An unlink chunk reads the node's
+      // descriptor before dropping its reference, and the last reference
+      // closes it.
       if (current->remaining_children_dirs_.fetch_sub(
-              1, std::memory_order_release) != 1) {
+              1, std::memory_order_acq_rel) != 1) {
         return;
       }
-      std::atomic_thread_fence(std::memory_order_acquire);
 
       if (RemoveEmptyLogged(current) != 0 && errno != ENOENT) {
         failures_++;
@@ -470,7 +532,7 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
     -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
-  if (!scheduler.Submit(task)) {
+  if (!scheduler.Submit(Task::Scan(task))) {
     delete task;
   }
 }
