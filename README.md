@@ -50,35 +50,28 @@ source ~/.bashrc
 
 ## Donationware
 
-**Remmy is donationware.** That means that if you like `remmy`, if you like my
-work and if you want to support remmy or me, you *should* donate. I like money
-as much as the next person, but I don't need it. **There are people who do**.
-Here are some institutions you can consider:
+**`remmy` is donationware.** That means that if you like `remmy`,
+if you like my work and if you want to support `remmy` or me, you
+*should* donate. Here are some institutions you can consider:
 
 - 🌍 [United World College](https://uwc.org/support-us/) transformed my life by
-  taking me from a backwater swamp and opening my eyes to different cultures,
-  worldly cultures of thought and helping me be financially secure. **Help
-  provide kids the same opportunity.** My cohort are all amazing people who are
-  all transforming the world.
+  taking me from a small town and opening my eyes to different cultures,
+  worldly perspectives and helping me be financially secure. **Help provide
+  kids the same opportunity.** My cohort are all amazing people who are all
+  transforming the world.
 - 🇮🇷 [Children of Persia](https://www.childrenofpersia.org/) is a fund which
   provides sustainable healthcare and education support to children in Iran.
-  With the ongoing war, **children need our support more than ever**. Iran is
-  is one of the west's most important cultures and the hell children have to
-  experience in Iran is a disgrace and an insult to Persia's **critical impact**
-  to the Greco-Roman legacy. **Help kids in Iran have the opportunity to
-  survive.** (_Note this is one of the few charities which directly supports
-  Iran and UN donors can support._)
+  With the ongoing war, **children need our support more than ever**. **Help
+  kids in Iran have a better chance at life.** (_Note this is one of the few
+  charities which directly supports Iran and that US donors can donate to._)
 - 🇵🇸 [Palestine Children's Relief Fund](https://www.pcrf.net/) provides medical
   care to injured and ill children who need access to medical care. **Help kids
-  survive war.** The ugly reality is many won't and we have to help as many as
-  we can. If you care about _basic survival for kids in war_, this is your best
-  donation place.
+  survive adversity.**
 - 🇺🇳 [UNICEF Early Childhood Development
   Kit](https://www.unicef.org/supply/early-childhood-development-ecd-kit)
   provides toys across the world to reduce the severity of developmental issues
-  to kids caught in conflicts. For many of its faults, UNICEF has helped the
-  war-torn country I found myself growing up in. **Help toddlers and very young
-  children develop.**
+  to kids caught in conflicts. **Help toddlers and very young children
+  develop.**
 - 🇺🇸 [Donors Choose](https://www.donorschoose.org/) is [empirically
   proven](https://news.umich.edu/even-small-crowdsourced-projects-from-teachers-make-a-difference-for-students/)
   to improve kids scores in US schools by about 1%. **If you care about
@@ -92,13 +85,6 @@ delay](https://www.sciencedirect.com/science/article/pii/S014759671930023X?via%3
   developmental delays and improve education** For any Chinese natives, please
   reach out to me if you know of a better charity that suits China's needs
   better.
-
-Our future is, by definition, in the hands of our children. The only effective
-way towards peace and escape from the ecological damnation is if we pour
-everything we can into our future. **Email me your receipt for any of the
-aforementioned and I will match with a total cap of up to $1K/mo.** Hopefully I
-can figure out a better way to handle matching, but email is the best way for
-now.
 
 ## Compatibility
 
