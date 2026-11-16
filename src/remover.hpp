@@ -23,6 +23,7 @@
 #include "dir_node.hpp"
 #include "gated_output.hpp"
 #include "request.hpp"
+#include "verified_dirs.hpp"
 
 namespace remmy {
 
@@ -35,24 +36,18 @@ class Remover {
  public:
   using Output = GatedOutput<typename Policy::Gate>;
 
-  /// @brief How RemoveDir reaches a directory.
-  enum class Reach : std::uint8_t {
-    /// By its path: for the walk, which removes moments after it looked.
-    kByPath,
-    /// Through DirNode::OpenVerified: for the prompter, which may remove
-    /// minutes after it looked.
-    kVerified,
-  };
-
   /// @param requests Where questions go; null exactly when Policy never asks.
-  /// @note `cli` must outlive this.
+  /// @param verified How the prompter reaches directories, since it may remove
+  ///        minutes after the walk looked; null for the walk, which removes
+  ///        by path moments after.
+  /// @note `cli` and `verified` must outlive this.
   Remover(const Cli& cli, Policy policy, Output output, RequestList* requests,
-          Reach reach) noexcept
+          VerifiedDirs* verified) noexcept
       : cli_(&cli),
         policy_(policy),
         output_(std::move(output)),
         requests_(requests),
-        reach_(reach) {}
+        verified_(verified) {}
 
   [[nodiscard]] auto Failures() const noexcept -> std::size_t {
     return failures_;
@@ -104,16 +99,19 @@ class Remover {
   /// @brief rmdir the emptied `node`, reporting a failure: other than
   ///        ENOENT when the walk does it, any when the prompter does.
   void RemoveDir(const DirNode* node) noexcept {
-    if (reach_ == Reach::kByPath || node->parent_ == nullptr) {
+    if (verified_ != nullptr) {
+      verified_->Forget(*node);
+    }
+    if (verified_ == nullptr || node->parent_ == nullptr) {
       if (RemoveEmptyLogged(node) != 0 &&
-          (errno != ENOENT || reach_ == Reach::kVerified)) {
+          (errno != ENOENT || verified_ != nullptr)) {
         Fail(scratch_, errno);
       }
       return;
     }
 
     const int status =
-        node->parent_->UnlinkChildVerified(node->name_, AT_REMOVEDIR);
+        verified_->UnlinkAt(*node->parent_, node->name_, AT_REMOVEDIR);
     const int error = errno;
     node->PathInto(scratch_);
     if (Logged(status, "{}", scratch_) != 0) {
@@ -162,7 +160,7 @@ class Remover {
   [[no_unique_address]] Policy policy_;
   Output output_;
   RequestList* requests_;
-  Reach reach_;
+  VerifiedDirs* verified_;
   std::string scratch_;
   std::size_t failures_ = 0;
 };

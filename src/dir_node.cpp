@@ -198,16 +198,6 @@ auto DirNode::OpenChecked() noexcept
   return {};
 }
 
-auto DirNode::UnlinkChildVerified(const std::string& name,
-                                  int flags) const noexcept -> int {
-  const auto dir = OpenVerified();
-  if (!dir) {
-    errno = static_cast<int>(dir.error().code);
-    return -1;
-  }
-  return cutils::os::unlinkat(*dir, name.c_str(), flags);
-}
-
 auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
   PathInto(scratch);
   return UnlinkPath(scratch, AT_REMOVEDIR);

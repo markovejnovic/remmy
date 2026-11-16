@@ -139,11 +139,6 @@ struct DirNode {
   /// @brief Open, but through OpenVerified.
   auto OpenChecked() noexcept -> std::expected<void, cutils::os::OpenError>;
 
-  /// @brief unlinkat(2) the entry `name` of this directory, reached through
-  ///        OpenVerified.
-  [[nodiscard]] auto UnlinkChildVerified(const std::string& name,
-                                         int flags) const noexcept -> int;
-
   /// @brief Remove this (by now empty) directory.
   ///
   /// @param scratch A scratch buffer; it holds this node's path afterwards.

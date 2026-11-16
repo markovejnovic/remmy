@@ -18,6 +18,7 @@
 #include "remover.hpp"
 #include "request.hpp"
 #include "unlink_worker.hpp"
+#include "verified_dirs.hpp"
 
 namespace remmy {
 
@@ -27,14 +28,17 @@ namespace remmy {
 template <class Policy, class Scheduler>
 class Prompter {
  public:
+  /// @param remover Must reach directories through `verified`.
   /// @note Every argument must outlive this.
   Prompter(Console& console, RequestList& requests, Scheduler& scheduler,
-           Policy policy, Remover<Policy> remover) noexcept
+           Policy policy, Remover<Policy> remover,
+           VerifiedDirs& verified) noexcept
       : console_(&console),
         requests_(&requests),
         scheduler_(&scheduler),
         policy_(policy),
-        remover_(std::move(remover)) {}
+        remover_(std::move(remover)),
+        verified_(&verified) {}
 
   [[nodiscard]] auto Failures() const noexcept -> std::size_t {
     return remover_.Failures();
@@ -114,7 +118,7 @@ class Prompter {
   /// Every failure is reported, an entry gone by now included, as rm does
   /// without -f: a person said yes to this one.
   void Unlink(const DirNode& dir, const std::string& name) noexcept {
-    if (remover_.Logged(dir.UnlinkChildVerified(name, 0), "{}", path_) != 0) {
+    if (remover_.Logged(verified_->UnlinkAt(dir, name, 0), "{}", path_) != 0) {
       remover_.Fail(path_, errno);
     }
   }
@@ -147,6 +151,7 @@ class Prompter {
   Scheduler* scheduler_;
   Policy policy_;
   Remover<Policy> remover_;
+  VerifiedDirs* verified_;
 
   /// @brief The path asked about, rebuilt for each question.
   std::string path_;

@@ -7,6 +7,7 @@ comes before every prompt inside it and its remove prompt after them, and exactl
 
 import os
 import re
+import resource
 import select
 import signal
 import subprocess
@@ -115,10 +116,13 @@ def test_an_unanswered_prompt_uses_no_cpu(remmy_bin: Path, workdir: Path) -> Non
     assert cpu < 0.2, f"remmy used {cpu:.2f}s of CPU over a second of waiting for an answer"
 
 
-def _run_on_pty(remmy_bin: Path, args: list[str], cwd: Path, typed: bytes, threads: int) -> tuple[int, str, str]:
+def _run_on_pty(
+    remmy_bin: Path, args: list[str], cwd: Path, typed: bytes, threads: int, fd_limit: int | None = None
+) -> tuple[int, str, str]:
     """Run remmy with a terminal on stdin and ``typed`` already typed into it."""
     master, slave = os.openpty()
     os.write(master, typed)
+    limit = (lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))) if fd_limit else None
     try:
         proc = subprocess.run(
             [str(remmy_bin), *args],
@@ -127,6 +131,7 @@ def _run_on_pty(remmy_bin: Path, args: list[str], cwd: Path, typed: bytes, threa
             stdin=slave,
             capture_output=True,
             timeout=60,
+            preexec_fn=limit,
             check=False,
         )
     finally:
@@ -249,3 +254,22 @@ def test_a_write_protected_directory_past_path_max_is_asked_about(remmy_bin: Pat
 
     assert re.search(r"override r-xr-xr-x \S+/\S+ for t/(d+/)+d+\? ", err), err
     assert (rc, fstree.exists(workdir / "t")) == (1, True), err
+
+
+@pytest.mark.parametrize("fd_limit", [8, 12])
+@pytest.mark.parametrize("override", [False, True], ids=["i", "override"])
+def test_a_yes_waits_for_a_free_descriptor(remmy_bin: Path, workdir: Path, fd_limit: int, override: bool) -> None:
+    """Short of descriptors, the prompter waits for the walk to free one rather than drop what a yes asked for."""
+    spec = {"d": {f"s{i}": {f"t{j}": {"ro": "x"} for j in range(4)} for i in range(30)}}
+    fstree.build(workdir, spec)
+    for i in range(30):
+        for j in range(4):
+            os.chmod(workdir / f"d/s{i}/t{j}/ro", 0o444)
+
+    if override:
+        rc, _, err = _run_on_pty(remmy_bin, ["-r", "d"], workdir, b"y\n" * 130, 4, fd_limit)
+    else:
+        res = run_remmy(remmy_bin, ["-ri", "d"], cwd=workdir, threads=4, fd_limit=fd_limit, input=b"y\n" * 500)
+        rc, err = res.returncode, res.stderr
+
+    assert (rc, fstree.exists(workdir / "d")) == (0, False), err[-2000:]

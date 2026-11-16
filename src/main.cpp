@@ -152,19 +152,25 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
 /// @brief Schedule the operand directory `path`, open as `dirfd`.
 ///
 /// @param prompts Whether the run may ask: then the root records which
-///        directory it opened, for DirNode::OpenVerified.
+///        directory it opened, for DirNode::OpenVerified, and is not
+///        scheduled (false, errno set) when that cannot be read.
 template <class Scheduler>
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path,
-              bool needs_override, bool prompts) -> void {
+              bool needs_override, bool prompts) -> bool {
+  struct stat st;
+  if (prompts && ::fstat(dirfd.get(), &st) != 0) {
+    return false;
+  }
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
   task->needs_override_ = needs_override;
-  if (struct stat st; prompts && ::fstat(task->fd_.get(), &st) == 0) {
+  if (prompts) {
     task->stat_ =
         std::make_unique<remmy::EntryStat>(remmy::EntryStat::From(st));
   }
   if (!scheduler.Submit(task)) {
     delete task;
   }
+  return true;
 }
 
 /// @brief The gate a policy's workers write through.
@@ -238,11 +244,11 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
   remmy::RequestList requests;
   auto& gate = GateFor<Policy>(console);
   using Remover = remmy::Remover<Policy>;
-  const auto remover = [&](typename Remover::Reach reach) {
+  const auto remover = [&](remmy::VerifiedDirs* reach) {
     return Remover(cli, policy, typename Remover::Output(gate, stdout),
                    Policy::kPrompts ? &requests : nullptr, reach);
   };
-  const Worker prototype(remover(Remover::Reach::kByPath));
+  const Worker prototype(remover(nullptr));
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
@@ -312,8 +318,12 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
       continue;
     }
 
-    SeedRoot(scheduler, *std::move(dirfd), path,
-             OperandNeedsOverride(policy, path, path_stat), Policy::kPrompts);
+    if (!SeedRoot(scheduler, *std::move(dirfd), path,
+                  OperandNeedsOverride(policy, path, path_stat),
+                  Policy::kPrompts)) {
+      WarnAt(prog, path, errno);
+      ++failures;
+    }
   }
 
   if constexpr (Policy::kPrompts) {
@@ -323,9 +333,9 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
       scheduler.Wait();
       requests.Push(remmy::Drained{});
     });
+    remmy::VerifiedDirs verified;
     remmy::Prompter<Policy, Scheduler> prompter(
-        console, requests, scheduler, policy,
-        remover(Remover::Reach::kVerified));
+        console, requests, scheduler, policy, remover(&verified), verified);
     prompter.Run();
     waiter.join();
     failures += prompter.Failures();
