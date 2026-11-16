@@ -1,5 +1,7 @@
 """BSD /bin/rm parity, part 1: the command line (usage, getopt, prompts, guards, invocation names, -P/-W/-x)."""
 
+from dataclasses import replace
+
 from parity import *
 
 F = (File("a", "A"),)
@@ -239,6 +241,10 @@ test_interactive_i = parity_test(
     Case("ir_trailing_slash", "-ir d/", T, stdin=pipe("y\n" * 10)),
     Case("ir_symlink_to_dir", "-ir l", (*T, Symlink("l", "d")), stdin=Y),
     Case("i_eof_examine_pty", "-ir d", T, stdin=pty("\x04")),
+    # End of input sticks, as in stdio: lines typed after a ^D are never read.
+    Case(
+        "i_pty_eof_is_sticky", "-ir e", (Dir("e"), *(File(f"e/{n}", n) for n in "abc")), stdin=pty("y\n\x04y\ny\ny\n")
+    ),
     # Between -f and -i the last one wins.
     Case("fi_file", "-fi a", F, stdin=N),
     Case("if_file", "-if a", F, stdin=N),
@@ -400,6 +406,7 @@ test_dot_and_slash_guards = parity_test(
 
 
 LEGACY = {"COMMAND_MODE": "legacy"}
+LEGACY_RO_TREE = (Dir("d", mode=0o555), Dir("d/sub"), File("d/sub/f", "F"))
 
 test_legacy_command_mode = parity_test(
     Case("legacy_missing_f", "-f nope", env=LEGACY),
@@ -411,4 +418,16 @@ test_legacy_command_mode = parity_test(
     Case("legacy_i_missing", "-i nope", stdin=N, env=LEGACY),
     Case("legacy_empty_string_f", ["-f", ""], env=LEGACY),
     Case("legacy_I_4files", "-I a b c d", F4, stdin=N, env=LEGACY),
+    # Legacy asks the override question before entering a directory, so a no keeps everything inside it.
+    *(
+        Case(f"legacy_ro_dir_r_pty_{name}", "-rv d", LEGACY_RO_TREE, stdin=pty(typed), env=LEGACY)
+        for name, typed in (("n", "n\n"), ("y", "y\n" * 4))
+    ),
+    Case(
+        "legacy_ro_subdir_r_pty_n",
+        "-rv t",
+        (Dir("t"), *(replace(e, path=f"t/{e.path}") for e in LEGACY_RO_TREE)),
+        stdin=TN,
+        env=LEGACY,
+    ),
 )

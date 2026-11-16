@@ -9,7 +9,11 @@
 #include <cutils/os/fd.hpp>
 #include <expected>
 #include <iterator>
+#include <memory>
 #include <string>
+#include <string_view>
+
+#include "entry_stat.hpp"
 
 namespace remmy {
 
@@ -82,6 +86,18 @@ struct DirNode {
   /// This also acts as the refcount which keeps the DirNode alive in memory.
   std::atomic<std::uint32_t> remaining_children_dirs_;
 
+  /// @brief Whether rm's override prompt comes before this directory's rmdir:
+  ///        it is unwritable or flag-protected, and stdin is a terminal.
+  bool needs_override_ = false;
+
+  /// @brief This directory as the walk found it, in runs that may ask; null
+  ///        otherwise.
+  ///
+  /// A question can wait for minutes, and an ancestor renamed or swapped for
+  /// a symlink meanwhile must not redirect what its answer removes. So in
+  /// those runs everything is reached through OpenVerified, never by path.
+  std::unique_ptr<EntryStat> stat_;
+
   explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name)
       : fd_(std::move(fd)),
         parent_(parent),
@@ -111,10 +127,31 @@ struct DirNode {
   auto Open(std::string& scratch) noexcept
       -> std::expected<void, cutils::os::OpenError>;
 
+  /// @brief Open this directory by walking down from its root with
+  ///        openat(2), one component at a time, refusing a symlink and any
+  ///        directory other than the one its stat_ records.
+  ///
+  /// Every node on the chain must have stat_. A component that was replaced
+  /// fails with ENOENT, as fts(3) reports it.
+  [[nodiscard]] auto OpenVerified() const noexcept
+      -> std::expected<cutils::os::Fd, cutils::os::OpenError>;
+
+  /// @brief Open, but through OpenVerified.
+  auto OpenChecked() noexcept -> std::expected<void, cutils::os::OpenError>;
+
   /// @brief Remove this (by now empty) directory.
   ///
   /// @param scratch A scratch buffer; it holds this node's path afterwards.
   auto RemoveEmpty(std::string& scratch) const noexcept -> int;
+
+  /// @brief unlinkat(2) the entry `name` of this directory, by path.
+  ///
+  /// By path, never through `fd_`: another thread may close that, and a
+  /// reused descriptor number would aim this at some other directory.
+  ///
+  /// @param scratch A scratch buffer; it holds the entry's path afterwards.
+  auto UnlinkChild(std::string_view name, int flags,
+                   std::string& scratch) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the
