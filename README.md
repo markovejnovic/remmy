@@ -16,8 +16,8 @@
 <p align="center">
   <!-- TODO(markovejnovic): Better benchmarks -->
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/res/time-dark.svg">
-    <img src=".github/res/time.svg" alt="Median time to delete a 38,227-file tree: remmy with 4 threads 0.63 s, find | xargs rm with 4 jobs 1.10 s, GNU rm, bfs and find 1.4 to 1.5 s, /bin/rm 1.62 s" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset=".github/res/rm-alikes-dark.svg">
+    <img src=".github/res/rm-alikes.svg" alt="rm-alikes on APFS, Apple M4, warm cache, balanced 38k-file tree: remmy 60.3k files/s, xargs rm 34.9k, GNU rm 27.5k, bfs -delete 26.7k, find -delete 25.1k, /bin/rm 23.5k; remmy is 2.6x faster than /bin/rm" width="720">
   </picture>
 </p>
 
@@ -152,8 +152,8 @@ options for removing directories:
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/res/speedup-by-tree-dark.svg">
-    <img src=".github/res/speedup-by-tree.svg" alt="Speedup over /bin/rm by tree shape at 4 threads: remmy 2.1 to 2.6 times on trees of 36k to 152k files, 1.5 times on 1 MiB files, 1.3 times on a 125-file tree, and no change on a single flat directory" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset=".github/res/by-workload-dark.svg">
+    <img src=".github/res/by-workload.svg" alt="remmy vs. rm by workload on macOS, warm cache: 2.6x faster on balanced-38k, 2.3x on balanced-152k, 2.1x on wide-38k, 2.5x on deep-38k, 1.5x on large-1mib-files, 1.3x on tiny-125, no change on flat-38k" width="720">
   </picture>
 </p>
 
