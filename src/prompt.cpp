@@ -10,11 +10,15 @@
 #include <cstdlib>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <tuple>
 
 #include "cutils/io/print.hpp"
+#include "cutils/os/file_flags.hpp"
+#include "cutils/os/mode_string.hpp"
 #include "cutils/os/os.hpp"
+#include "cutils/os/owner_names.hpp"
 
 namespace remmy {
 
@@ -24,6 +28,29 @@ void RemovePrompt::Render(PromptWriter& out) const noexcept {
 
 void ExaminePrompt::Render(PromptWriter& out) const noexcept {
   std::ignore = cutils::io::Print(out, "examine files in directory {}? ", path);
+}
+
+auto OverrideInfo::From(const struct stat& st) noexcept -> OverrideInfo {
+#if defined(__APPLE__)
+  const std::uint32_t flags = st.st_flags;
+#else
+  const std::uint32_t flags = 0;
+#endif
+  return {
+      .mode = st.st_mode, .uid = st.st_uid, .gid = st.st_gid, .flags = flags};
+}
+
+void OverridePrompt::Render(PromptWriter& out) const noexcept {
+  // rm prints strmode's text past the type letter, a space only if
+  // strmode left none, then any flags with a space after them.
+  const cutils::os::ModeString mode(info.mode);
+  const std::string_view text = mode.View();
+  const std::string flags = cutils::os::FlagNames(info.flags);
+  std::ignore = cutils::io::Print(
+      out, "override {}{}{}/{} {}{}for {}? ", text.substr(1),
+      std::string_view{text.back() == ' ' ? "" : " "},
+      cutils::os::UserName(info.uid), cutils::os::GroupName(info.gid), flags,
+      std::string_view{flags.empty() ? "" : " "}, path);
 }
 
 void BulkPrompt::Render(PromptWriter& out) const noexcept {

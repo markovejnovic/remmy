@@ -79,26 +79,6 @@ fs mount_points mountpoint_r_no_x x_operand_is_mount
 fs permissions r_subdir_0444
 """),
     ),
-    "override-prompt": Gap(
-        "With a tty on stdin and neither -f nor -i in effect, an unwritable file, or one with user flags, gets "
-        "'override <strmode> <user>/<group> [<flags> ]for <path>? ' (strmode without the type, so setuid and sticky "
-        "show as S and T; flags like 'uappnd,uchg') and is removed only on yes, directories at rmdir time; rm does "
-        "not clear uchg/uappnd, so a yes still ends in 'Operation not permitted'. A pipe, /dev/null or closed stdin "
-        "never prompts.",
-        _keys("""
-cli override_prompts hidden_flag_pty nodump_flag_ro_pty ro_dir_r_pty_n ro_dir_r_pty_y ro_emptydir_d_pty
-cli override_prompts ro_emptydir_r_pty_n ro_emptydir_r_pty_y ro_file_000_pty ro_file_1444_pty
-cli override_prompts ro_file_4444_pty ro_file_555_pty ro_file_LANG_C_pty ro_file_in_tree_pty_n
-cli override_prompts ro_file_pty_eof ro_file_pty_n ro_file_pty_y ro_file_pty_yes_word ro_file_r_pty
-cli override_prompts ro_file_setgid_pty ro_file_sticky_x_pty ro_files_pty_mixed uappnd_pty uchg_dir_r_pty
-cli override_prompts uchg_file_pty_n uchg_file_pty_y uchg_ro_file_pty_n uchg_uappnd_pty
-edges interactive_i ro_file_pty_legacy
-edges prompt_once_I I_4files_then_override_pty I_r_then_override_pty
-fs file_flags uchg_file_0444_pty uchg_file_pty uchg_file_pty_no
-fs names esc_name_prompt_pty
-fs permissions file_0444_pty_no file_0444_pty_yes tree_0444_files_r_pty
-"""),
-    ),
     "flags-pwx": Gap(
         "-P still opens a regular file for writing before removing it, so an unwritable one fails with 'Permission "
         "denied' even under -f; -W (without -r) undeletes instead of removing: an existing name fails with 'File "

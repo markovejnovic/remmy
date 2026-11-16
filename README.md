@@ -100,12 +100,6 @@ yell at me.**
 
 All known divergences between Apple's `rm` and `remmy` are documented here.
 
-#### Write Protection Prompt
-
-When stdin is a terminal and neither `-f` nor `-i` is given, `rm` asks before
-removing a file you cannot write to. `remmy` does not support this. The issue
-is tracked in #40.
-
 #### `-P`, `-W` and `-x`
 
 - **`-P`**: `rm` opens each regular file for writing before removing it, so a
@@ -149,6 +143,15 @@ change**. What `remmy -i` does keep:
 So answering at a terminal, or `yes | remmy -ri`, removes exactly what was
 agreed to. Answers piped in ahead of time that are not all the same, such as
 `printf 'y\nn\n' | remmy -ri d`, can land on different files than with `rm`.
+
+The same holds for the question `rm -r` asks at a terminal before removing a
+file it cannot write, `override r--r--r-- you/staff for d/x? `.
+
+#### Owner Names on Linux
+
+The Linux builds are static, so they cannot load the NSS modules that look up
+users and groups beyond `/etc/passwd` and `/etc/group`. An owner known only to
+LDAP or the like shows as its number in `override` prompts.
 
 ## Performance
 

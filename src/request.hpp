@@ -14,6 +14,7 @@
 #include "cutils/sync/mpsc_list.hpp"
 #include "cutils/task_scheduler/task_scheduler.hpp"
 #include "dir_node.hpp"
+#include "prompt.hpp"
 
 namespace remmy {
 
@@ -23,6 +24,18 @@ namespace remmy {
 struct ConfirmRemove {
   DirNode* parent;
   std::string name;
+  cutils::WorkToken token;
+};
+
+/// @brief May the write-protected non-directory `name` in `parent` be
+///        removed anyway?
+///
+/// Holds one reference on `parent`. `info` was read while the walk still had
+/// the directory open.
+struct ConfirmOverride {
+  DirNode* parent;
+  std::string name;
+  OverrideInfo info;
   cutils::WorkToken token;
 };
 
@@ -45,8 +58,8 @@ struct ConfirmRmdir {
 /// @brief Every task and request has finished; the prompter may stop.
 struct Drained {};
 
-using Request =
-    std::variant<ConfirmRemove, ConfirmExamine, ConfirmRmdir, Drained>;
+using Request = std::variant<ConfirmRemove, ConfirmOverride, ConfirmExamine,
+                             ConfirmRmdir, Drained>;
 
 using RequestList = cutils::sync::MpscList<Request>;
 

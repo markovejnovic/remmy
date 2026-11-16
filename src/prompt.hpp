@@ -8,6 +8,8 @@
 #define REMMY_PROMPT_HPP
 
 #include <locale.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <concepts>
 #include <cstddef>
@@ -63,6 +65,31 @@ struct RemovePrompt {
 struct ExaminePrompt {
   static constexpr Grammar kGrammar = Grammar::kFirstByteRpMatch;
 
+  std::string_view path;
+
+  void Render(PromptWriter& out) const noexcept;
+};
+
+/// @brief What the override prompt prints about an entry, from its lstat.
+struct OverrideInfo {
+  mode_t mode;
+  uid_t uid;
+  gid_t gid;
+
+  /// @brief chflags(2) flags; 0 on Linux.
+  std::uint32_t flags;
+
+  [[nodiscard]] static auto From(const struct stat& st) noexcept
+      -> OverrideInfo;
+};
+
+/// @brief The question before removing what this process cannot write, or
+///        what file flags protect, such as
+///        `override r--r--r-- marko/staff uchg for a? `.
+struct OverridePrompt {
+  static constexpr Grammar kGrammar = Grammar::kFirstByteRpMatch;
+
+  OverrideInfo info;
   std::string_view path;
 
   void Render(PromptWriter& out) const noexcept;

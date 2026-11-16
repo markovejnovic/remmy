@@ -112,3 +112,38 @@ def test_an_unanswered_prompt_uses_no_cpu(remmy_bin: Path, workdir: Path) -> Non
         os.close(master)
     cpu = usage.ru_utime + usage.ru_stime
     assert cpu < 0.2, f"remmy used {cpu:.2f}s of CPU over a second of waiting for an answer"
+
+
+def _run_on_pty(remmy_bin: Path, args: list[str], cwd: Path, typed: bytes, threads: int) -> tuple[int, str, str]:
+    """Run remmy with a terminal on stdin and ``typed`` already typed into it."""
+    master, slave = os.openpty()
+    os.write(master, typed)
+    try:
+        proc = subprocess.run(
+            [str(remmy_bin), *args],
+            cwd=cwd,
+            env=remmy_env(threads),
+            stdin=slave,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    finally:
+        os.close(slave)
+        os.close(master)
+    return proc.returncode, proc.stdout.decode(), proc.stderr.decode()
+
+
+@pytest.mark.parametrize("threads", [1, 4, 16])
+def test_each_unwritable_file_in_a_tree_is_asked_about_once(remmy_bin: Path, workdir: Path, threads: int) -> None:
+    """At a terminal, without -f, every read-only file anywhere in the walk gets one override question."""
+    subdirs = [f"s{i}" for i in range(6)]
+    fstree.build(workdir, {"d": {s: {"ro": "x", "rw": "x"} for s in subdirs}})
+    for s in subdirs:
+        os.chmod(workdir / "d" / s / "ro", 0o444)
+
+    rc, out, err = _run_on_pty(remmy_bin, ["-r", "d"], workdir, b"y\n" * len(subdirs), threads)
+
+    asked = re.findall(r"override r--r--r-- \S+/\S+ for (d/s\d/ro)\? ", err)
+    assert sorted(asked) == sorted(f"d/{s}/ro" for s in subdirs), err
+    assert (rc, out, fstree.exists(workdir / "d")) == (0, "", False), err

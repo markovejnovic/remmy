@@ -58,6 +58,7 @@
 #include <cutils/io/stderr_writer.hpp>
 #include <cutils/io/stdout_writer.hpp>
 #include <cutils/io/warn.hpp>
+#include <cutils/os/attr_dir_reader.hpp>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
 #include <cutils/os/limits/fd.hpp>
@@ -148,9 +149,10 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
 }
 
 template <class Scheduler>
-auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
-    -> void {
+auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path,
+              bool needs_override) -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
+  task->needs_override_ = needs_override;
   if (!scheduler.Submit(task)) {
     delete task;
   }
@@ -167,16 +169,41 @@ auto GateFor(remmy::Console& console) noexcept -> typename Policy::Gate& {
   }
 }
 
-/// @brief -i's question about one operand; yes when the policy asks none.
+/// @brief Whether rm's override prompt comes before removing the operand
+///        `path`, whose lstat is `st`.
+template <class Policy>
+auto OperandNeedsOverride(const Policy& policy, const char* path,
+                          const struct stat& st) noexcept -> bool {
+  if constexpr (Policy::kReadsAttrs) {
+    const auto kind = S_ISDIR(st.st_mode)   ? cutils::os::EntryKind::kDirectory
+                      : S_ISLNK(st.st_mode) ? cutils::os::EntryKind::kSymlink
+                                            : cutils::os::EntryKind::kOther;
+    const bool writable =
+        kind != cutils::os::EntryKind::kSymlink && ::access(path, W_OK) == 0;
+    return policy.NeedsOverride(kind, writable,
+                                remmy::OverrideInfo::From(st).flags);
+  } else {
+    return false;
+  }
+}
+
+/// @brief The question about one operand before it is removed or entered;
+///        yes when the policy asks none.
 template <class Policy>
 auto ConfirmOperand(remmy::Console& console, const Policy& policy,
-                    const char* path, bool enters) noexcept -> remmy::Answer {
+                    const char* path, const struct stat& st,
+                    bool enters) noexcept -> remmy::Answer {
   if constexpr (Policy::kAsksEveryEntry) {
     return enters && policy.AsksToExamine()
                ? console.Ask(remmy::ExaminePrompt{.path = path})
                : console.Ask(remmy::RemovePrompt{.path = path});
   } else {
-    return remmy::Answer::kYes;
+    // A directory walked under -r is asked about at its rmdir, if at all.
+    if (enters || !OperandNeedsOverride(policy, path, st)) {
+      return remmy::Answer::kYes;
+    }
+    return console.Ask(remmy::OverridePrompt{
+        .info = remmy::OverrideInfo::From(st), .path = path});
   }
 }
 
@@ -221,7 +248,8 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
     }
 
     if (!S_ISDIR(path_stat.st_mode)) {
-      if (ConfirmOperand(console, policy, path, false) == remmy::Answer::kNo) {
+      if (ConfirmOperand(console, policy, path, path_stat, false) ==
+          remmy::Answer::kNo) {
         continue;
       }
       if (LogIfRemoved(cli, stdout, cutils::os::unlink(path), "{}", path) !=
@@ -236,7 +264,7 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
 
     if (!cli.Options().recursive) {
       if (cli.Options().dir) {
-        if (ConfirmOperand(console, policy, path, false) ==
+        if (ConfirmOperand(console, policy, path, path_stat, false) ==
             remmy::Answer::kNo) {
           continue;
         }
@@ -256,7 +284,8 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
       continue;
     }
 
-    if (ConfirmOperand(console, policy, path, true) == remmy::Answer::kNo) {
+    if (ConfirmOperand(console, policy, path, path_stat, true) ==
+        remmy::Answer::kNo) {
       continue;
     }
 
@@ -272,7 +301,8 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
       continue;
     }
 
-    SeedRoot(scheduler, *std::move(dirfd), path);
+    SeedRoot(scheduler, *std::move(dirfd), path,
+             OperandNeedsOverride(policy, path, path_stat));
   }
 
   if constexpr (Policy::kPrompts) {
@@ -311,7 +341,11 @@ auto RunRm(const remmy::Cli& cli) -> int {
 
   return std::visit(
       [&](auto policy) { return RunRmWith(cli, console, policy); },
-      remmy::ChoosePolicy(cli.Options(), remmy::CurrentCommandMode()));
+      remmy::ChoosePolicy(
+          cli.Options(),
+          remmy::PromptContext{.mode = remmy::CurrentCommandMode(),
+                               .stdin_is_tty = ::isatty(STDIN_FILENO) != 0,
+                               .is_root = cutils::os::GetEUid() == 0}));
 }
 
 }  // namespace

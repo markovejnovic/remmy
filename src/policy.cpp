@@ -15,10 +15,13 @@ auto CurrentCommandMode() noexcept -> CommandMode {
              : CommandMode::kUnix2003;
 }
 
-auto ChoosePolicy(const Options& options, CommandMode mode) noexcept
+auto ChoosePolicy(const Options& options, PromptContext context) noexcept
     -> PromptPolicy {
   if (options.interactive) {
-    return AskAll{.mode = mode};
+    return AskAll{.mode = context.mode};
+  }
+  if (!options.force && context.stdin_is_tty) {
+    return AskUnwritable{.is_root = context.is_root};
   }
   return NeverAsk{};
 }

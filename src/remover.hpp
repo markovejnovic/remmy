@@ -48,6 +48,9 @@ class Remover {
   /// @brief The command line this removes for.
   [[nodiscard]] auto Command() const noexcept -> const Cli& { return *cli_; }
 
+  /// @brief The policy this removes under.
+  [[nodiscard]] auto Rules() const noexcept -> const Policy& { return policy_; }
+
   [[nodiscard]] auto Out() noexcept -> Output& { return output_; }
 
   [[nodiscard]] auto Requests() const noexcept -> RequestList& {
@@ -118,7 +121,7 @@ class Remover {
       }
       std::atomic_thread_fence(std::memory_order_acquire);
 
-      if (policy_.AsksBeforeRmdir()) {
+      if (policy_.AsksBeforeRmdir(*current)) {
         requests_->Push(ConfirmRmdir{.dir = current, .token = holder.Hold()});
         return;
       }

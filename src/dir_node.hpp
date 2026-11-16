@@ -83,6 +83,10 @@ struct DirNode {
   /// This also acts as the refcount which keeps the DirNode alive in memory.
   std::atomic<std::uint32_t> remaining_children_dirs_;
 
+  /// @brief Whether rm's override prompt comes before this directory's rmdir:
+  ///        it is unwritable or flag-protected, and stdin is a terminal.
+  bool needs_override_ = false;
+
   explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name)
       : fd_(std::move(fd)),
         parent_(parent),
