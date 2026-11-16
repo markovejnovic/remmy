@@ -184,10 +184,6 @@ Here's what remmy does (or doesn't do) to speed stuff up.
    allocate, remmy tries really hard not to. Even CLI parsing skips
    allocations.
 
-### Detailed Benchmarks
-
-TODO
-
 ## Contributing
 
 Thank you for wanting to contribute! Here are some quick notes:
