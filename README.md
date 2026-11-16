@@ -153,20 +153,23 @@ options for removing directories:
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/res/by-workload-dark.svg">
-    <img src=".github/res/by-workload.svg" alt="remmy vs. rm by workload on macOS, warm cache: 2.6x faster on balanced-38k, 2.3x on balanced-152k, 2.1x on wide-38k, 2.5x on deep-38k, 1.5x on large-1mib-files, 1.3x on tiny-125, no change on flat-38k" width="720">
+    <img src=".github/res/by-workload.svg" alt="remmy vs. rm by workload on macOS, warm cache: 2.6x faster on balanced-38k, 2.3x on balanced-152k, 2.1x on wide-38k, 2.5x on deep-36k, 1.5x on large-1mib-files, 1.3x on tiny-125, no change on flat-38k" width="720">
   </picture>
 </p>
 
-| Tool                          | Time    | Files/s | vs. `rm` |
-| ----------------------------- | ------: | ------: | -------: |
-| **remmy** (4 threads)         | 0.63 s  |    60k  | **2.6×** |
-| `find \| xargs -P4 rm`        | 1.10 s  |    35k  |    1.48× |
-| GNU `rm -rf`                  | 1.39 s  |    28k  |    1.17× |
-| remmy (1 thread)              | 1.40 s  |    27k  |    1.16× |
-| `bfs -delete`                 | 1.43 s  |    27k  |    1.13× |
-| `find -delete`                | 1.52 s  |    25k  |    1.07× |
-| `/bin/rm -rf`                 | 1.62 s  |    24k  |    1.0×  |
-| `find \| xargs rm`            | 1.84 s  |    21k  |    0.88× |
+The workloads are modeled after a real `node_modules` tree (a fresh `npm ci`
+has ~40k files, 7.2 files per directory, most of them 4 KiB or smaller) and
+variations on its shape:
+
+| Workload           | Fanout | Depth |   Files | File size | Note                                                                |
+| ------------------ | -----: | ----: | ------: | --------: | ------------------------------------------------------------------- |
+| `balanced-38k`     |      4 |     6 |  38,227 |     4 KiB | Baseline. Shaped after a `node_modules` of 5,461 dirs of 7 files.   |
+| `balanced-152k`    |      4 |     7 | 152,915 |     4 KiB | A larger workload.                                                  |
+| `wide-38k`         |  5,460 |     1 |  38,227 |     4 KiB | Same as baseline, but every directory sits directly under the root. |
+| `deep-36k`         |      2 |    11 |  36,855 |     4 KiB | Deep tree.                                                          |
+| `flat-38k`         |      0 |     0 |  38,227 |     4 KiB | All files in a single directory.                                    |
+| `large-1mib-files` |      6 |     2 |   1,935 |     1 MiB | Freeing data should be the majority of overhead.                    |
+| `tiny-125`         |      4 |     1 |     125 |     4 KiB | Tiny tree deletions. Measures startup cost.                         |
 
 Here's what remmy does (or doesn't do) to speed stuff up.
 
