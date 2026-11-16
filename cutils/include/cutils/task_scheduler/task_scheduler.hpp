@@ -141,7 +141,9 @@ class TaskScheduler {
   /// @brief Submit a new task into the scheduler, potentially creating a new
   ///        thread if the number of threads is lower than max.
   ///
-  /// @note Thread safe.
+  /// @warning Only one thread outside the workers may submit, and only one at
+  ///          a time: these land in a Chase-Lev deque whose push is owner-only.
+  ///          Workers submit through their TaskContext instead.
   [[nodiscard]] auto Submit(const task_type& task,
                             std::size_t priority = 0) noexcept -> bool {
     if (activity_.stop_.load(std::memory_order_relaxed)) {
