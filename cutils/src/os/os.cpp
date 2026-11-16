@@ -3,7 +3,11 @@
 #include "cutils/os/os.hpp"
 
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -11,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace cutils::os {
 namespace {
@@ -71,6 +76,19 @@ auto GetEUid() noexcept -> ::uid_t {
     cached.store(euid, std::memory_order_relaxed);
   }
   return euid;
+}
+
+auto PerformanceCores() noexcept -> unsigned {
+#if defined(__APPLE__)
+  int cores = 0;
+  std::size_t size = sizeof(cores);
+  if (::sysctlbyname("hw.perflevel0.logicalcpu", &cores, &size, nullptr, 0) ==
+          0 &&
+      cores > 0) {
+    return static_cast<unsigned>(cores);
+  }
+#endif
+  return std::max(1U, std::thread::hardware_concurrency());
 }
 
 }  // namespace cutils::os

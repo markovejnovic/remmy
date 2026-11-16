@@ -73,7 +73,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -94,8 +93,8 @@ static auto ThreadCount() -> std::uint16_t {
     return n;
   }
 
-  const unsigned hw = std::thread::hardware_concurrency();
-  return static_cast<std::uint16_t>(std::min(hw, kMaxThreads));
+  return static_cast<std::uint16_t>(
+      std::min(cutils::os::PerformanceCores(), kMaxThreads));
 }
 
 /// @brief Report a failure the same way BSD rm's does.

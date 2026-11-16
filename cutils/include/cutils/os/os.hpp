@@ -76,6 +76,9 @@ using RawDirent = ::dirent64;
 
 auto GetEUid() noexcept -> ::uid_t;
 
+/// @brief How many CPUs of the fastest kind this machine has.
+[[nodiscard]] auto PerformanceCores() noexcept -> unsigned;
+
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {
   return ::lstat(path, out);
 }
