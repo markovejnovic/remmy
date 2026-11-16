@@ -4,6 +4,8 @@
 
 #include <unistd.h>
 #if defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
 #include <sys/sysctl.h>
 #endif
 
@@ -16,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 
 namespace cutils::os {
 namespace {
@@ -89,6 +92,13 @@ auto PerformanceCores() noexcept -> unsigned {
   }
 #endif
   return std::max(1U, std::thread::hardware_concurrency());
+}
+
+void MarkThreadUserInitiated() noexcept {
+#if defined(__APPLE__)
+  // Best effort: the only failure is an invalid class.
+  std::ignore = ::pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+#endif
 }
 
 }  // namespace cutils::os

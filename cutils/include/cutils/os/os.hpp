@@ -83,6 +83,14 @@ auto GetEUid() noexcept -> ::uid_t;
 /// when the sysctl is missing, it is every CPU. Never less than 1.
 [[nodiscard]] auto PerformanceCores() noexcept -> unsigned;
 
+/// @brief Mark the calling thread as work the user is waiting on.
+///
+/// On Darwin this is QOS_CLASS_USER_INITIATED, which keeps the thread off the
+/// efficiency cores when performance cores are free. New threads start at
+/// QOS_CLASS_DEFAULT whatever their creator runs at, so each thread asks for
+/// itself. A no-op elsewhere.
+void MarkThreadUserInitiated() noexcept;
+
 inline auto lstat(const char* path, struct ::stat* out) noexcept -> int {
   return ::lstat(path, out);
 }
