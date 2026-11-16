@@ -153,7 +153,7 @@ options for removing directories:
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/res/by-workload-dark.svg">
-    <img src=".github/res/by-workload.svg" alt="remmy vs. rm by workload on macOS, warm cache: 2.6x faster on balanced-38k, 2.3x on balanced-152k, 2.1x on wide-38k, 2.5x on deep-38k, 1.5x on large-1mib-files, 1.3x on tiny-125, no change on flat-38k" width="720">
+    <img src=".github/res/by-workload.svg" alt="remmy vs. rm by workload on macOS, warm cache: 2.6x faster on balanced-38k, 2.3x on balanced-152k, 2.1x on wide-38k, 2.5x on deep-36k, 1.5x on large-1mib-files, 1.3x on tiny-125, no change on flat-38k" width="720">
   </picture>
 </p>
 
