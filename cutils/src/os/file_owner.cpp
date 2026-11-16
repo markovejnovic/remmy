@@ -23,6 +23,7 @@
 #include <optional>
 #include <ranges>
 #include <string_view>
+#include <utility>
 #endif
 
 namespace cutils::os {
@@ -86,16 +87,29 @@ auto NameFor(const char* path, std::uint32_t id) -> std::optional<std::string> {
   return std::nullopt;
 }
 
+/// @brief NameFor, remembering the last id asked about: prompts in a row are
+///        mostly about the same owner.
+auto CachedNameFor(const char* path, std::uint32_t id,
+                   std::optional<std::pair<std::uint32_t, std::string>>& last)
+    -> std::string {
+  if (!last || last->first != id) {
+    last.emplace(id, NameFor(path, id).value_or(std::to_string(id)));
+  }
+  return last->second;
+}
+
 }  // namespace
 
 auto FlagNames(std::uint32_t /*flags*/) -> std::string { return {}; }
 
 auto UserName(uid_t uid) -> std::string {
-  return NameFor("/etc/passwd", uid).value_or(std::to_string(uid));
+  thread_local std::optional<std::pair<std::uint32_t, std::string>> last;
+  return CachedNameFor("/etc/passwd", uid, last);
 }
 
 auto GroupName(gid_t gid) -> std::string {
-  return NameFor("/etc/group", gid).value_or(std::to_string(gid));
+  thread_local std::optional<std::pair<std::uint32_t, std::string>> last;
+  return CachedNameFor("/etc/group", gid, last);
 }
 
 #endif
