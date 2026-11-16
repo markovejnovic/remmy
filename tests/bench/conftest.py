@@ -90,11 +90,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     bench = session.config.stash.get(BENCH_KEY, None)
     if bench is None or not bench.samples:
         return
-    import charts
-
     summary = bench.summary()
-    bench.write_json(summary)  # before the charts, so the data survives a charting failure
-    charts.render(bench.run(), summary, bench.out)
+    bench.write_json(summary)
     shutil.rmtree(bench.env.scratch, ignore_errors=True)
     if terminal := session.config.pluginmanager.getplugin("terminalreporter"):
         terminal.write_sep("=", "benchmark")

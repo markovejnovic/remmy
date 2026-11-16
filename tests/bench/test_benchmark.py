@@ -1,5 +1,5 @@
 """The comparison benchmark (opt-in: pytest tests/bench --bench=demo). Each test_matrix times one (fixture, cache)
-matrix: every tool at every thread count, a fresh tree per run, in shuffled rounds. Charts are written at session end.
+matrix: every tool at every thread count, a fresh tree per run, in shuffled rounds.
 """
 
 import pytest

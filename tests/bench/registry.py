@@ -79,8 +79,8 @@ def _linux_tools(remmy: Path) -> tuple[Tool, ...]:
     )
 
 
-# Each id names the tree's shape and file count, and is how results are labelled everywhere: pytest ids, chart
-# files, and Bencher (demo/balanced-38k/warm/remmy@4). test_fixture_ids_match_their_trees keeps the counts honest.
+# Each id names the tree's shape and file count, and is how results are labelled everywhere: pytest ids and
+# Bencher (demo/balanced-38k/warm/remmy@4). test_fixture_ids_match_their_trees keeps the counts honest.
 #
 # Every file is 4 KiB unless a tree says otherwise. In real node_modules trees ~80% of files are <= 4 KiB (median
 # ~1 KiB), and APFS and ext4 allocate them one 4 KiB block each, so every file frees a block like a real one does.
