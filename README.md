@@ -9,7 +9,7 @@
 [![rm parity](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmarkovejnovic%2Fremmy%2Fbadges%2Fparity.json&style=flat-square)](#compatibility)
 ![C++26](https://img.shields.io/badge/C%2B%2B-26-00599C?style=flat-square&logo=cplusplus&logoColor=white)
 ![GCC 16](https://img.shields.io/badge/GCC-16-A42E2B?style=flat-square&logo=gnu&logoColor=white)
-[![License](https://img.shields.io/badge/license-source--available-lightgrey?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 </div>
 
@@ -202,9 +202,6 @@ areas. **None of the tests are hand-written**.
 
 - Be nice and respectful in the issues/PRs. If you are mean to people, I will
   immediately ban you from the project.
-- **Note the license is not open-source. It is very close to GPLv3, but it is
-  not GPLv3.** For the most part, this is due to an exclusion for the Omarchy
-  project to use `remmy`.
 - You are very welcome to open issues and/or PRs. I will do my **absolute
   best** to help you push your PRs across the finish line.
 - I will not accept AI PRs. _I get to use AI because I maintain the project and
@@ -218,4 +215,4 @@ areas. **None of the tests are hand-written**.
 
 ## License
 
-Source-available, not open source. See [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE).
