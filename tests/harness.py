@@ -39,7 +39,10 @@ def remmy_env(threads: int | str | None = None, env: dict[str, str] | None = Non
     return out | (env or {})
 
 
-def run_remmy(remmy_bin: Path, args, *, cwd: Path, threads=None, fd_limit: int | None = None, env=None) -> Result:
+def run_remmy(
+    remmy_bin: Path, args, *, cwd: Path, threads=None, fd_limit: int | None = None, env=None, input: bytes | None = None
+) -> Result:
+    """Run remmy with ``input`` piped to stdin, or stdin on /dev/null."""
     argv = [str(remmy_bin), *map(os.fsdecode, args)]
     # Lower both limits so remmy cannot raise its way out of the squeeze.
     limit = (lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))) if fd_limit else None
@@ -47,7 +50,8 @@ def run_remmy(remmy_bin: Path, args, *, cwd: Path, threads=None, fd_limit: int |
         argv,
         cwd=cwd,
         env=remmy_env(threads, env),
-        stdin=subprocess.DEVNULL,
+        stdin=None if input is not None else subprocess.DEVNULL,
+        input=input,
         capture_output=True,
         timeout=RUN_TIMEOUT,
         preexec_fn=limit,

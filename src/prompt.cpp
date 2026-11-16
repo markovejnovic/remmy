@@ -2,9 +2,12 @@
 
 #include "prompt.hpp"
 
+#include <locale.h>
 #include <sys/stat.h>
 
+#include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -14,6 +17,14 @@
 #include "cutils/os/os.hpp"
 
 namespace remmy {
+
+void RemovePrompt::Render(PromptWriter& out) const noexcept {
+  std::ignore = cutils::io::Print(out, "remove {}? ", path);
+}
+
+void ExaminePrompt::Render(PromptWriter& out) const noexcept {
+  std::ignore = cutils::io::Print(out, "examine files in directory {}? ", path);
+}
 
 void BulkPrompt::Render(PromptWriter& out) const noexcept {
   if (recursive && dirs > 0) {
@@ -58,6 +69,38 @@ auto BulkPromptFor(std::span<char* const> operands, bool recursive) noexcept
     return std::nullopt;
   }
   return prompt;
+}
+
+AnswerLocale::AnswerLocale() noexcept
+    : locale_(::newlocale(LC_ALL_MASK, "", nullptr)) {}
+
+AnswerLocale::~AnswerLocale() {
+  if (locale_ != nullptr) {
+    ::freelocale(locale_);
+  }
+}
+
+auto AnswerLocale::IsYes(char first) const noexcept -> bool {
+  const std::array<char, 2> response{first, '\0'};
+  locale_t previous =
+      ::uselocale(locale_ != nullptr ? locale_ : LC_GLOBAL_LOCALE);
+  const int matched = ::rpmatch(response.data());
+  ::uselocale(previous);
+  return matched == 1;
+}
+
+auto Console::ReadFirstByteRpMatch() noexcept -> Answer {
+  const std::optional<char> first = in_.ReadByte();
+  if (!first) {
+    return Answer::kNo;
+  }
+  if (*first != '\n') {
+    std::ignore = in_.SkipPast('\n');
+  }
+  if (!locale_) {
+    locale_.emplace();
+  }
+  return locale_->IsYes(*first) ? Answer::kYes : Answer::kNo;
 }
 
 auto Console::ReadStrictYesNo() noexcept -> std::optional<Answer> {

@@ -79,35 +79,6 @@ fs mount_points mountpoint_r_no_x x_operand_is_mount
 fs permissions r_subdir_0444
 """),
     ),
-    "prompt-interactive": Gap(
-        "-i asks 'remove <path>? ' on stderr for each operand, reads one line from stdin (pipe, /dev/null or tty) and "
-        "takes it through rpmatch(3) in the current locale ('j' under de_DE; EOF and anything unrecognised mean no; a "
-        "no is not an error); -id asks 'remove <dir>? ' for directories; -ir asks 'examine files in directory <dir>? ' "
-        "before entering and 'remove <dir>? ' after it (COMMAND_MODE=legacy: 'remove <dir>? ' first). Names are "
-        "printed raw. Only cases whose prompts form one ancestor chain are listed here.",
-        _keys("""
-cli dot_and_slash_guards slash_i
-cli interactive_i Ii_file f_i_separate fi_file fi_missing iI_file i_crlf i_dangling_symlink i_dir_no_r
-cli interactive_i i_eof_examine_pty i_fifo i_file_LANG_C_y i_file_LANG_C_yes i_file_LANG_de_j
-cli interactive_i i_file_LANG_fr_o i_file_devnull i_file_pipe_N i_file_pipe_YES i_file_pipe_Y
-cli interactive_i i_file_pipe_empty_line i_file_pipe_eof i_file_pipe_n i_file_pipe_no i_file_pipe_space_y
-cli interactive_i i_file_pipe_x i_file_pipe_y i_file_pipe_y_noeol i_file_pipe_yes i_file_pipe_yx
-cli interactive_i i_file_pty_eof i_file_pty_n i_file_pty_y i_long_answer_line i_missing i_multi_eof_early
-cli interactive_i i_multi_mixed i_prompt_odd_name i_symlink i_utf8_answer id_emptydir_y ir_emptydir
-cli interactive_i ir_emptydir_n_on_remove ir_symlink_to_dir ir_tree_eof ir_tree_examine_n irv_examine_n_v
-cli interactive_i iv_file_y stdin_closed_i
-cli legacy_command_mode legacy_fi legacy_i_missing
-cli override_prompts i_ro_file_pty_y i_uchg_file_pty_y ro_file_pipe_i_n ro_file_pty_i_n
-cli prompt_once_I i_and_I_r_4files
-cli usage_and_getopt ii
-edges P_and_W P_i_n
-edges interactive_i i_pipe_eof_mid_line i_pipe_leading_tab i_pipe_nul_in_answer i_pipe_yes_sentence
-edges interactive_i i_pty_leading_spaces i_pty_three_answers i_raw_names_in_prompt id_empty_dir_n
-edges interactive_i id_nonempty_dir idv_empty_dir ir_closed_stdin ir_legacy ir_unreadable_subdir
-edges symlinks_to_directories i_symlink_to_dir_nor ir_symlink_to_dir_slash
-fs path_shapes file_trailing_slash_rfi
-"""),
-    ),
     "override-prompt": Gap(
         "With a tty on stdin and neither -f nor -i in effect, an unwritable file, or one with user flags, gets "
         "'override <strmode> <user>/<group> [<flags> ]for <path>? ' (strmode without the type, so setuid and sticky "
@@ -154,13 +125,12 @@ edges misc rv_raw_names_in_tree
 fs missing_and_directories rdv_nested
 fs recursion_and_order fs_rv_tree
 """)
-# Cases using -i, -I or -x, which remmy refuses for now: they fail every time.
+# Cases that fail every time: -i asks about a directory's entries before what is inside its earlier
+# subdirectories, where fts asks depth first; and -x, which remmy refuses.
 _ORDERING_REFUSED = _keys("""
 cli P_W_x x_flag
-cli interactive_i ir_pty_all_y ir_trailing_slash ir_tree_all_y ir_tree_examine_y_rest_n
-cli interactive_i ir_tree_keep_one_file ir_tree_y_then_eof ird_tree irv_tree_all_y
+cli interactive_i ir_pty_all_y ir_trailing_slash ir_tree_all_y ir_tree_keep_one_file ird_tree irv_tree_all_y
 cli prompt_once_I I_and_i_r
-edges interactive_i irv_special_files_in_tree
 """)
 
 DEFERRED = {

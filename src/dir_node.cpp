@@ -59,6 +59,29 @@ auto OpenLong(std::string_view path, int flags) noexcept
   return OpenAt(dir, piece.data(), flags);
 }
 
+/// @brief unlinkat(2) `path` relative to the cwd, even when it is PATH_MAX
+///        bytes or longer.
+auto UnlinkPath(const std::string& path, int flags) noexcept -> int {
+  if (path.size() < PATH_MAX) {
+    return flags == AT_REMOVEDIR ? cutils::os::rmdir(path.c_str())
+                                 : cutils::os::unlink(path.c_str());
+  }
+
+  // Too long for one call: remove it relative to its parent instead.
+  const std::size_t slash = path.rfind('/');
+  if (slash == std::string::npos) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  const auto parent = OpenLong(std::string_view{path}.substr(0, slash),
+                               O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (!parent) {
+    errno = static_cast<int>(parent.error().code);
+    return -1;
+  }
+  return cutils::os::unlinkat(*parent, path.c_str() + slash + 1, flags);
+}
+
 }  // namespace
 
 auto DirNode::Parents() const noexcept -> ParentChain {
@@ -112,25 +135,16 @@ auto DirNode::Open(std::string& path_buf) noexcept
 }
 
 auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {
-  const char* const c_path = PathInto(scratch);
-  const std::string_view path = scratch;
-  if (path.size() < PATH_MAX) {
-    return cutils::os::rmdir(c_path);
-  }
+  PathInto(scratch);
+  return UnlinkPath(scratch, AT_REMOVEDIR);
+}
 
-  // Too long for rmdir: remove it relative to its parent instead.
-  const std::size_t slash = path.rfind('/');
-  if (slash == std::string_view::npos) {
-    errno = ENAMETOOLONG;
-    return -1;
-  }
-  const auto parent = OpenLong(std::string_view{c_path, slash},
-                               O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (!parent) {
-    errno = static_cast<int>(parent.error().code);
-    return -1;
-  }
-  return cutils::os::unlinkat(*parent, c_path + slash + 1, AT_REMOVEDIR);
+auto DirNode::UnlinkChild(std::string_view name, int flags,
+                          std::string& scratch) const noexcept -> int {
+  PathInto(scratch);
+  scratch += '/';
+  scratch += name;
+  return UnlinkPath(scratch, flags);
 }
 
 }  // namespace remmy

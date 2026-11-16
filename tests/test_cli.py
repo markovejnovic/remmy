@@ -80,10 +80,6 @@ def test_dot_slash_prefix_removes_dash_prefixed_names(run: Runner, workdir: Path
 @pytest.mark.parametrize(
     ("args", "letter"),
     [
-        (("-i", "f"), "i"),
-        (("-r", "-i", "d"), "i"),
-        (("-fi", "f"), "i"),
-        (("-f", "-i", "f"), "i"),
         (("-W", "f"), "W"),
         (("-fW", "f"), "W"),
         (("-rx", "d"), "x"),

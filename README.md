@@ -100,12 +100,6 @@ yell at me.**
 
 All known divergences between Apple's `rm` and `remmy` are documented here.
 
-#### Interactive Mode
-
-`rm -i` asks `remove a? ` before each file and, with `-r`,
-`examine files in directory d? ` before entering a directory. `remmy` does not
-support this yet. The issue is tracked in #39.
-
 #### Write Protection Prompt
 
 When stdin is a terminal and neither `-f` nor `-i` is given, `rm` asks before
@@ -139,11 +133,22 @@ is tracked in #40.
   messages depend on timing. Fixing this is tracked in
   [#27](https://github.com/markovejnovic/remmy/issues/27).
 
-#### Verbose Ordering
+#### Output and Prompt Ordering
 
-`-v` output and error messages behave differently. `rm` prints them in
-depth-first order. `remmy` walks sibling directories in parallel, so the same
-lines come out in a different order. This is **expected and will not change**.
+`rm` prints `-v` lines and errors, and asks its `-i` questions, in depth-first
+order. `remmy` walks sibling directories in parallel, so the same lines and
+questions come out in a different order. This is **expected and will not
+change**. What `remmy -i` does keep:
+
+- Each answer applies to the question printed just before it.
+- `examine files in directory d? ` comes before every question about what is
+  inside `d`, and `remove d? ` after all of them.
+- The entries of one directory are asked about in the order it lists them.
+- The operands are asked about in the order given.
+
+So answering at a terminal, or `yes | remmy -ri`, removes exactly what was
+agreed to. Answers piped in ahead of time that are not all the same, such as
+`printf 'y\nn\n' | remmy -ri d`, can land on different files than with `rm`.
 
 ## Performance
 

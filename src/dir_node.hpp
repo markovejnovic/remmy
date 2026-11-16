@@ -10,6 +10,7 @@
 #include <expected>
 #include <iterator>
 #include <string>
+#include <string_view>
 
 namespace remmy {
 
@@ -115,6 +116,15 @@ struct DirNode {
   ///
   /// @param scratch A scratch buffer; it holds this node's path afterwards.
   auto RemoveEmpty(std::string& scratch) const noexcept -> int;
+
+  /// @brief unlinkat(2) the entry `name` of this directory, by path.
+  ///
+  /// By path, never through `fd_`: another thread may close that, and a
+  /// reused descriptor number would aim this at some other directory.
+  ///
+  /// @param scratch A scratch buffer; it holds the entry's path afterwards.
+  auto UnlinkChild(std::string_view name, int flags,
+                   std::string& scratch) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the

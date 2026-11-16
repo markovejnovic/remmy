@@ -7,6 +7,8 @@
 #ifndef REMMY_PROMPT_HPP
 #define REMMY_PROMPT_HPP
 
+#include <locale.h>
+
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +21,7 @@
 #include "cutils/io/stderr_writer.hpp"
 #include "cutils/io/stdin_reader.hpp"
 #include "cutils/io/writer_ref.hpp"
+#include "cutils/sync/output_gate.hpp"
 
 namespace remmy {
 
@@ -27,6 +30,9 @@ enum class Answer : std::uint8_t { kNo, kYes };
 
 /// @brief How a prompt's reply line is read.
 enum class Grammar : std::uint8_t {
+  /// rm's yes_or_no(): rpmatch(3) in the user's locale on the line's first
+  /// byte alone; end of input, or anything rpmatch does not call yes, is no.
+  kFirstByteRpMatch,
   /// rm's check2(): asks again until the line starts with y, Y, n or N; end
   /// of input is no.
   kStrictYesNo,
@@ -41,6 +47,25 @@ template <class P>
 concept Prompt = requires(const P& prompt, PromptWriter& out) {
   { prompt.Render(out) } noexcept;
   { P::kGrammar } -> std::convertible_to<Grammar>;
+};
+
+/// @brief -i's question before removing one entry: `remove d/x? `.
+struct RemovePrompt {
+  static constexpr Grammar kGrammar = Grammar::kFirstByteRpMatch;
+
+  std::string_view path;
+
+  void Render(PromptWriter& out) const noexcept;
+};
+
+/// @brief -ir's question before entering a directory, such as
+///        `examine files in directory d? `.
+struct ExaminePrompt {
+  static constexpr Grammar kGrammar = Grammar::kFirstByteRpMatch;
+
+  std::string_view path;
+
+  void Render(PromptWriter& out) const noexcept;
 };
 
 /// @brief -I's single question before anything is removed, such as
@@ -68,7 +93,33 @@ struct BulkPrompt {
                                  bool recursive) noexcept
     -> std::optional<BulkPrompt>;
 
+/// @brief The user's locale, for reading answers, apart from the process's.
+///
+/// rm calls setlocale(LC_ALL, ""); remmy does not, since that is not thread
+/// safe and would localise glibc's strerror for every worker. Only the
+/// rpmatch(3) call runs in this locale.
+class AnswerLocale {
+ public:
+  AnswerLocale() noexcept;
+  AnswerLocale(const AnswerLocale&) = delete;
+  AnswerLocale(AnswerLocale&&) = delete;
+  auto operator=(const AnswerLocale&) -> AnswerLocale& = delete;
+  auto operator=(AnswerLocale&&) -> AnswerLocale& = delete;
+  ~AnswerLocale();
+
+  /// @brief Whether rpmatch(3) calls the one-byte answer `first` yes.
+  [[nodiscard]] auto IsYes(char first) const noexcept -> bool;
+
+ private:
+  /// @brief The user's locale, or null when it cannot be loaded, which (as
+  ///        for rm's failed setlocale) leaves answers read in C.
+  locale_t locale_;
+};
+
 /// @brief The terminal: the one place questions are asked and answers read.
+///
+/// Owns the OutputGate workers write through, and closes it around each
+/// question so nothing they print lands between a prompt and its answer.
 class Console {
  public:
   Console() noexcept = default;
@@ -81,7 +132,25 @@ class Console {
   /// @brief Ask `prompt` on stderr and read the answer from stdin.
   template <Prompt P>
   [[nodiscard]] auto Ask(const P& prompt) noexcept -> Answer {
-    if constexpr (P::kGrammar == Grammar::kStrictYesNo) {
+    gate_.Close();
+    const Answer answer = AskWhileClosed(prompt);
+    gate_.Open();
+    return answer;
+  }
+
+  /// @brief The gate workers' output goes through while this asks.
+  [[nodiscard]] auto Gate() noexcept -> cutils::sync::OutputGate& {
+    return gate_;
+  }
+
+ private:
+  template <Prompt P>
+  [[nodiscard]] auto AskWhileClosed(const P& prompt) noexcept -> Answer {
+    if constexpr (P::kGrammar == Grammar::kFirstByteRpMatch) {
+      Show(prompt);
+      return ReadFirstByteRpMatch();
+    } else {
+      static_assert(P::kGrammar == Grammar::kStrictYesNo);
       while (true) {
         Show(prompt);
         if (const std::optional<Answer> answer = ReadStrictYesNo()) {
@@ -91,7 +160,6 @@ class Console {
     }
   }
 
- private:
   template <Prompt P>
   static void Show(const P& prompt) noexcept {
     PromptWriter line(cutils::io::stderr_writer);
@@ -99,10 +167,18 @@ class Console {
     std::ignore = line.Flush();
   }
 
+  /// @brief One kFirstByteRpMatch reply.
+  [[nodiscard]] auto ReadFirstByteRpMatch() noexcept -> Answer;
+
   /// @brief One kStrictYesNo reply, or nullopt to ask again.
   [[nodiscard]] auto ReadStrictYesNo() noexcept -> std::optional<Answer>;
 
   cutils::io::StdinReader& in_ = cutils::io::stdin_reader;
+  cutils::sync::OutputGate gate_;
+
+  /// @brief Loaded on the first answer read through rpmatch, so runs that
+  ///        never ask one never pay for it.
+  std::optional<AnswerLocale> locale_;
 };
 
 }  // namespace remmy
