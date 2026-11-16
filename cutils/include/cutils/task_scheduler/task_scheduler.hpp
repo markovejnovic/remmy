@@ -26,29 +26,85 @@
 #include <atomic>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <cutils/collections/heap_array.hpp>
 #include <cutils/concepts.hpp>
+#include <cutils/os/wait_on_address.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
 #include <memory>
+#include <new>
 #include <optional>
 #include <ranges>
 #include <thread>
 #include <tuple>
+#include <utility>
 #ifndef NDEBUG
 #include <cassert>
-#include <utility>
 #endif
 
 namespace cutils {
 
 namespace detail {
+struct TokenIssuer;
+}  // namespace detail
+
+/// @brief Outstanding work a TaskScheduler does not run itself; its Wait
+///        does not return while one is alive.
+///
+/// Not tied to the scheduler's type, so the work it stands for (a request
+/// to another thread, say) can carry one without naming its scheduler.
+class [[nodiscard]] WorkToken {
+ public:
+  WorkToken(const WorkToken&) = delete;
+  auto operator=(const WorkToken&) -> WorkToken& = delete;
+  WorkToken(WorkToken&& other) noexcept
+      : pending_(std::exchange(other.pending_, nullptr)) {}
+  auto operator=(WorkToken&&) -> WorkToken& = delete;
+
+  ~WorkToken() {
+    if (pending_ != nullptr &&
+        pending_->fetch_sub(1, std::memory_order_relaxed) == 1) {
+      pending_->notify_one();
+    }
+  }
+
+ private:
+  friend struct detail::TokenIssuer;
+
+  explicit WorkToken(std::atomic<std::size_t>& pending) noexcept
+      : pending_(&pending) {}
+
+  std::atomic<std::size_t>* pending_;
+};
+
+namespace detail {
+
+/// @brief The one way to make a WorkToken: count it into `pending` first.
+struct TokenIssuer {
+  [[nodiscard]] static auto Issue(std::atomic<std::size_t>& pending) noexcept
+      -> WorkToken {
+    pending.fetch_add(1, std::memory_order_relaxed);
+    return WorkToken{pending};
+  }
+};
 
 template <TriviallyCopyable Task>
 struct TaskContextInterface {
   void Submit(const Task& task, std::size_t priority = 0) noexcept;
+  [[nodiscard]] auto Hold() noexcept -> WorkToken;
 };
 
 }  // namespace detail
+
+/// @brief What a worker does when it finds no task.
+enum class Idle : std::uint8_t {
+  /// Yield and look again. Lowest wake-up latency, but an idle worker keeps
+  /// a core busy.
+  kSpin,
+  /// Sleep until work is submitted. Idle workers cost no CPU; every submit
+  /// pays a fence and a load to see whether one needs waking.
+  kPark,
+};
 
 /// @brief Persistent worker responsible for accepting and processing tasks.
 template <typename Worker>
@@ -79,6 +135,9 @@ class TaskContext {
     scheduler_->Submit(*slot_, task, priority);
   }
 
+  /// @brief See TaskScheduler::Hold.
+  [[nodiscard]] auto Hold() noexcept -> WorkToken { return scheduler_->Hold(); }
+
  private:
   friend Scheduler;
 
@@ -93,6 +152,7 @@ class TaskContext {
 ///
 /// @todo Write some docs
 template <IsWorker Worker, std::size_t kPriorities = 1,
+          Idle kIdle = Idle::kSpin,
           typename Allocator = std::allocator<std::byte>>
 class TaskScheduler {
   static_assert(kPriorities >= 1, "a scheduler needs at least one priority");
@@ -152,8 +212,16 @@ class TaskScheduler {
     activity_.pending_tasks_.fetch_add(1, std::memory_order_relaxed);
     submitted_[priority].Insert(task);
 
+    WakeParked();
     MaybeGrowThreads();
     return true;
+  }
+
+  /// @brief Count work that happens outside the scheduler, such as a task
+  ///        waiting on another thread before it can be submitted, so Wait
+  ///        does not finish under it. Thread safe.
+  [[nodiscard]] auto Hold() noexcept -> WorkToken {
+    return detail::TokenIssuer::Issue(activity_.pending_tasks_);
   }
 
   /// @brief Wait for the scheduler to finish its tasks.
@@ -211,12 +279,56 @@ class TaskScheduler {
               std::size_t priority) noexcept {
     activity_.pending_tasks_.fetch_add(1, std::memory_order_relaxed);
     slot.queues[priority].Insert(task);
+    WakeParked();
     MaybeGrowThreads();
+  }
+
+  /// @brief Mark one task or token done, waking Wait on the last one.
+  void FinishOne() noexcept {
+    if (activity_.pending_tasks_.fetch_sub(1, std::memory_order_relaxed) == 1) {
+      activity_.pending_tasks_.notify_one();
+    }
+  }
+
+  /// @brief Wake one parked worker, if any, for a task just inserted.
+  void WakeParked() noexcept {
+    if constexpr (kIdle == Idle::kPark) {
+      // Pairs with the fence in ParkUntilWork: either we see the worker
+      // counted as parked, or it sees the task we inserted.
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+      if (parking_.parked.load(std::memory_order_relaxed) != 0) {
+        // Changing the word is what makes a wake that beats the worker's
+        // sleep count: its WaitOnAddress then sees a stale epoch.
+        parking_.epoch.fetch_add(1, std::memory_order_relaxed);
+        os::WakeOne(parking_.epoch);
+      }
+    }
+  }
+
+  /// @brief Sleep until a task may be available, taking it if one already is.
+  [[nodiscard]] auto ParkUntilWork(Slot& self) noexcept
+      -> std::tuple<std::optional<task_type>, std::size_t> {
+    const std::uint32_t seen = parking_.epoch.load(std::memory_order_seq_cst);
+    parking_.parked.fetch_add(1, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
+    auto acquired = AcquireNextTask(self);
+    if (!std::get<0>(acquired) &&
+        !activity_.stop_.load(std::memory_order_relaxed)) {
+      os::WaitOnAddress(parking_.epoch, seen);
+    }
+    parking_.parked.fetch_sub(1, std::memory_order_relaxed);
+    return acquired;
   }
 
   /// @brief Send a stop signal to all the threads and wait for them to finish.
   void StopAndJoinThreads() {
     activity_.stop_.store(true, std::memory_order_relaxed);
+    if constexpr (kIdle == Idle::kPark) {
+      // seq_cst so a worker that reads the new epoch also sees stop_.
+      parking_.epoch.fetch_add(1, std::memory_order_seq_cst);
+      os::WakeAll(parking_.epoch);
+    }
     for (auto& slot : slots_) {
       if (slot.thread.joinable()) {
         slot.thread.join();
@@ -294,15 +406,19 @@ class TaskScheduler {
       [[maybe_unused]] auto [task, taken_priority] = AcquireNextTask(self);
 
       if (!task) {
-        std::this_thread::yield();
-        continue;
+        if constexpr (kIdle == Idle::kSpin) {
+          std::this_thread::yield();
+          continue;
+        } else {
+          std::tie(task, taken_priority) = ParkUntilWork(self);
+          if (!task) {
+            continue;
+          }
+        }
       }
 
       self.worker.Process(*task, context);
-      if (activity_.pending_tasks_.fetch_sub(1, std::memory_order_relaxed) ==
-          1) {
-        activity_.pending_tasks_.notify_one();
-      }
+      FinishOne();
 
       if constexpr (kPriorities > 1) {
         if (taken_priority == kPriorities - 1) {
@@ -334,6 +450,15 @@ class TaskScheduler {
 
   /// @brief Holds each of the priorities of the scheduler.
   std::array<WorkStealingQueue<task_type>, kPriorities> submitted_;
+
+  /// @brief Where Idle::kPark workers sleep; untouched under Idle::kSpin.
+  alignas(std::hardware_destructive_interference_size) struct {
+    /// @brief Bumped to wake parked workers; they sleep on its old value.
+    std::atomic<std::uint32_t> epoch{0};
+
+    /// @brief How many workers are parked or about to park.
+    std::atomic<std::uint32_t> parked{0};
+  } parking_;
 };
 
 }  // namespace cutils

@@ -1,19 +1,29 @@
 // See LICENSE in the repository root.
 
+#include <sys/resource.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <memory>
+#include <optional>
 #include <semaphore>
 #include <span>
+#include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
+using cutils::Idle;
+using Spin = std::integral_constant<Idle, Idle::kSpin>;
+using Park = std::integral_constant<Idle, Idle::kPark>;
+
 constexpr std::size_t kUrgent = 0;
 constexpr std::size_t kDemoted = 1;
 constexpr std::size_t kTwoTiers = 2;
@@ -126,6 +136,21 @@ struct StealingWork {
   }
 };
 
+/// Takes a token from inside its task and parks it where the test can drop it.
+struct HoldingWork {
+  using task_type = int;
+
+  std::optional<cutils::WorkToken>* held;
+
+  /// @brief Set once `held` is filled, publishing it to the test thread.
+  std::atomic<bool>* taken;
+
+  void Process(task_type, auto& context) noexcept {
+    held->emplace(context.Hold());
+    taken->store(true, std::memory_order_release);
+  }
+};
+
 /// Logs the order tasks are selected in; the root submits one task at each
 /// priority, demoted first.
 struct PriorityOrder {
@@ -182,15 +207,18 @@ SCENARIO("Every externally submitted task runs exactly once",
   }
 }
 
-SCENARIO("Tasks submitted from within workers run exactly once",
-         "[task_scheduler]") {
+TEMPLATE_TEST_CASE(
+    "Scenario: Tasks submitted from within workers run "
+    "exactly once",
+    "[task_scheduler]", Spin, Park) {
   const auto workers = GENERATE(0UZ, 1UZ, 4UZ, 8UZ);
   CAPTURE(workers);
 
   GIVEN("a scheduler whose tasks fan out into a complete binary tree") {
     constexpr std::size_t kCount = 8191;
     std::vector<std::atomic<unsigned>> seen(kCount);
-    cutils::TaskScheduler executor(workers, TreeWork(seen));
+    cutils::TaskScheduler<TreeWork, 1, TestType::value> executor(
+        workers, TreeWork(seen));
 
     WHEN("the root is submitted and the scheduler is waited on") {
       REQUIRE(executor.Submit(0));
@@ -282,5 +310,151 @@ SCENARIO("A worker prefers urgent work over demoted work", "[task_scheduler]") {
         REQUIRE(worker.selected == std::array{0, 2, 1});
       }
     }
+  }
+}
+
+namespace {
+
+/// CPU time this process has used, user and system.
+auto ProcessCpuTime() -> std::chrono::microseconds {
+  rusage usage{};
+  getrusage(RUSAGE_SELF, &usage);
+  const auto total = [](const timeval& tv) {
+    return std::chrono::seconds(tv.tv_sec) +
+           std::chrono::microseconds(tv.tv_usec);
+  };
+  return total(usage.ru_utime) + total(usage.ru_stime);
+}
+
+/// Poll `done` until it holds, for at most two seconds.
+template <class Predicate>
+auto Eventually(Predicate done) -> bool {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!done()) {
+    if (std::chrono::steady_clock::now() > deadline) {
+      return false;
+    }
+    std::this_thread::yield();
+  }
+  return true;
+}
+
+// Long enough that idle workers have gone to sleep.
+constexpr auto kSettle = std::chrono::milliseconds(50);
+
+}  // namespace
+
+TEMPLATE_TEST_CASE("Scenario: Wait does not return while a work token is held",
+                   "[task_scheduler]", Spin, Park) {
+  GIVEN("a scheduler with one token held and a thread waiting on it") {
+    cutils::TaskScheduler<VisitWork, 1, TestType::value> executor(2);
+    std::optional token{executor.Hold()};
+    std::atomic<bool> returned{false};
+    std::jthread waiter([&] {
+      executor.Wait();
+      returned.store(true);
+    });
+
+    WHEN("time passes with the token still held") {
+      std::this_thread::sleep_for(kSettle);
+
+      THEN("the wait has not returned") { CHECK_FALSE(returned.load()); }
+    }
+
+    WHEN("the token is dropped") {
+      token.reset();
+      waiter.join();
+
+      THEN("the wait returns") { CHECK(returned.load()); }
+    }
+
+    // The waiter's join, on scope exit, needs the token gone.
+    token.reset();
+  }
+}
+
+SCENARIO("A parked worker wakes for work submitted later", "[task_scheduler]") {
+  GIVEN("a one-worker parking scheduler that has gone idle") {
+    std::vector<Payload> payloads(2);
+    cutils::TaskScheduler<VisitWork, 1, Idle::kPark> executor(1);
+    std::optional token{executor.Hold()};
+    REQUIRE(executor.Submit(&payloads[0]));
+    REQUIRE(Eventually([&] { return payloads[0].visits.load() == 1; }));
+    std::this_thread::sleep_for(kSettle);
+
+    WHEN("another task is submitted from outside") {
+      REQUIRE(executor.Submit(&payloads[1]));
+
+      THEN("the worker runs it") {
+        CHECK(Eventually([&] { return payloads[1].visits.load() == 1; }));
+      }
+    }
+
+    token.reset();
+    executor.Wait();
+  }
+}
+
+SCENARIO("Parked workers use no CPU while there is nothing to do",
+         "[task_scheduler]") {
+  GIVEN("four parking workers, all started and then left without work") {
+    constexpr std::size_t kWorkers = 4;
+    std::vector<Payload> payloads(kWorkers);
+    cutils::TaskScheduler<VisitWork, 1, Idle::kPark> executor(kWorkers);
+    std::optional token{executor.Hold()};
+    for (auto& payload : payloads) {
+      REQUIRE(executor.Submit(&payload));
+    }
+    REQUIRE(Eventually([&] {
+      return std::ranges::all_of(payloads, [](const Payload& payload) {
+        return payload.visits.load() == 1;
+      });
+    }));
+    std::this_thread::sleep_for(kSettle);
+
+    WHEN("they sit idle for 300 ms") {
+      const auto before = ProcessCpuTime();
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      const auto used = ProcessCpuTime() - before;
+
+      THEN("the process used well under one core's worth of that time") {
+        CAPTURE(used.count());
+        CHECK(used < std::chrono::milliseconds(100));
+      }
+    }
+
+    token.reset();
+    executor.Wait();
+  }
+}
+
+SCENARIO("A token taken inside a task keeps Wait from returning",
+         "[task_scheduler]") {
+  GIVEN("a task that leaves a token behind, and a thread waiting") {
+    std::optional<cutils::WorkToken> held;
+    std::atomic<bool> taken{false};
+    cutils::TaskScheduler<HoldingWork, 1, Idle::kPark> executor(
+        1, HoldingWork{&held, &taken});
+    REQUIRE(executor.Submit(0));
+    REQUIRE(Eventually([&] { return taken.load(std::memory_order_acquire); }));
+    std::atomic<bool> returned{false};
+    std::jthread waiter([&] {
+      executor.Wait();
+      returned.store(true);
+    });
+    std::this_thread::sleep_for(kSettle);
+
+    THEN("the wait has not returned") { CHECK_FALSE(returned.load()); }
+
+    WHEN("the token is dropped") {
+      held.reset();
+      waiter.join();
+
+      THEN("the wait returns") { CHECK(returned.load()); }
+    }
+
+    // The waiter's join, on scope exit, needs the token gone.
+    held.reset();
   }
 }
