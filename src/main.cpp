@@ -93,10 +93,6 @@ static auto ThreadCount() -> std::uint16_t {
     return n;
   }
 
-  // APFS serializes a volume's metadata changes behind one lock, so past about
-  // four threads remmy only adds waiters. Fewer than that only on machines
-  // with fewer performance cores: the lock holder should never be stuck on an
-  // efficiency core while the others wait on it.
   return static_cast<std::uint16_t>(
       std::min(cutils::os::PerformanceCores(), kMaxThreads));
 }
