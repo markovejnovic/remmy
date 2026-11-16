@@ -66,6 +66,7 @@
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/variant.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -148,11 +149,19 @@ auto RunUnlink(const remmy::UnlinkCli& cli) noexcept -> int {
   return 0;
 }
 
+/// @brief Schedule the operand directory `path`, open as `dirfd`.
+///
+/// @param prompts Whether the run may ask: then the root records which
+///        directory it opened, for DirNode::OpenVerified.
 template <class Scheduler>
 auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path,
-              bool needs_override) -> void {
+              bool needs_override, bool prompts) -> void {
   auto* task = new DirNode(std::move(dirfd), nullptr, std::string{path});
   task->needs_override_ = needs_override;
+  if (struct stat st; prompts && ::fstat(task->fd_.get(), &st) == 0) {
+    task->stat_ =
+        std::make_unique<remmy::EntryStat>(remmy::EntryStat::From(st));
+  }
   if (!scheduler.Submit(task)) {
     delete task;
   }
@@ -181,7 +190,7 @@ auto OperandNeedsOverride(const Policy& policy, const char* path,
     const bool writable =
         kind != cutils::os::EntryKind::kSymlink && ::access(path, W_OK) == 0;
     return policy.NeedsOverride(kind, writable,
-                                remmy::OverrideInfo::From(st).flags);
+                                remmy::EntryStat::From(st).flags);
   } else {
     return false;
   }
@@ -198,12 +207,14 @@ auto ConfirmOperand(remmy::Console& console, const Policy& policy,
                ? console.Ask(remmy::ExaminePrompt{.path = path})
                : console.Ask(remmy::RemovePrompt{.path = path});
   } else {
-    // A directory walked under -r is asked about at its rmdir, if at all.
-    if (enters || !OperandNeedsOverride(policy, path, st)) {
+    // A directory walked under -r is asked about before entering it in
+    // legacy mode, at its rmdir otherwise.
+    if ((enters && !policy.AsksBeforeEntering()) ||
+        !OperandNeedsOverride(policy, path, st)) {
       return remmy::Answer::kYes;
     }
-    return console.Ask(remmy::OverridePrompt{
-        .info = remmy::OverrideInfo::From(st), .path = path});
+    return console.Ask(remmy::OverridePrompt{.info = remmy::EntryStat::From(st),
+                                             .path = path});
   }
 }
 
@@ -226,12 +237,12 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
   const std::string_view prog = cli.CommandName();
   remmy::RequestList requests;
   auto& gate = GateFor<Policy>(console);
-  const auto remover = [&] {
-    return remmy::Remover<Policy>(
-        cli, policy, typename remmy::Remover<Policy>::Output(gate, stdout),
-        Policy::kPrompts ? &requests : nullptr);
+  using Remover = remmy::Remover<Policy>;
+  const auto remover = [&](typename Remover::Reach reach) {
+    return Remover(cli, policy, typename Remover::Output(gate, stdout),
+                   Policy::kPrompts ? &requests : nullptr, reach);
   };
-  const Worker prototype(remover());
+  const Worker prototype(remover(Remover::Reach::kByPath));
   Scheduler scheduler(threads, prototype);
 
   std::size_t failures = cli.HasDroppedOperands() ? 1 : 0;
@@ -302,7 +313,7 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
     }
 
     SeedRoot(scheduler, *std::move(dirfd), path,
-             OperandNeedsOverride(policy, path, path_stat));
+             OperandNeedsOverride(policy, path, path_stat), Policy::kPrompts);
   }
 
   if constexpr (Policy::kPrompts) {
@@ -312,8 +323,9 @@ auto RunRmWith(const remmy::Cli& cli, remmy::Console& console, Policy policy)
       scheduler.Wait();
       requests.Push(remmy::Drained{});
     });
-    remmy::Prompter<Policy, Scheduler> prompter(console, requests, scheduler,
-                                                policy, remover());
+    remmy::Prompter<Policy, Scheduler> prompter(
+        console, requests, scheduler, policy,
+        remover(Remover::Reach::kVerified));
     prompter.Run();
     waiter.join();
     failures += prompter.Failures();

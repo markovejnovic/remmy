@@ -11,6 +11,7 @@ import select
 import signal
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import fstree
@@ -147,3 +148,104 @@ def test_each_unwritable_file_in_a_tree_is_asked_about_once(remmy_bin: Path, wor
     asked = re.findall(r"override r--r--r-- \S+/\S+ for (d/s\d/ro)\? ", err)
     assert sorted(asked) == sorted(f"d/{s}/ro" for s in subdirs), err
     assert (rc, out, fstree.exists(workdir / "d")) == (0, "", False), err
+
+
+def _drive(
+    remmy_bin: Path, args: list[str], cwd: Path, steps: list[tuple[bytes, Callable[[], None] | None]], *, tty: bool
+) -> tuple[int, str]:
+    """Answer yes at each prompt in ``steps``, first running its action, and yes to every later one."""
+    master = slave = None
+    if tty:
+        master, slave = os.openpty()
+    stdin = slave if tty else subprocess.PIPE
+    proc = subprocess.Popen([str(remmy_bin), *args], cwd=cwd, env=remmy_env(2), stdin=stdin, stderr=subprocess.PIPE)
+
+    def answer(text: bytes) -> None:
+        if tty:
+            os.write(master, text)
+        else:
+            proc.stdin.write(text)
+            proc.stdin.flush()
+
+    seen = b""
+    try:
+        for prompt, action in steps:
+            deadline = time.monotonic() + 10
+            while prompt not in seen and time.monotonic() < deadline:
+                if select.select([proc.stderr], [], [], 0.5)[0]:
+                    seen += os.read(proc.stderr.fileno(), 4096)
+            assert prompt in seen, f"never asked {prompt!r}: {seen!r}"
+            if action is not None:
+                action()
+            answer(b"y\n")
+        answer(b"y\n" * 20)
+        if not tty:
+            proc.stdin.close()
+        seen += proc.stderr.read()
+        rc = proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        for fd in (slave, master):
+            if fd is not None:
+                os.close(fd)
+    return rc, seen.decode()
+
+
+def _swap_for_symlink(work: Path) -> None:
+    (work / "d/sub").rename(work / "moved")
+    (work / "d/sub").symlink_to(work / "victim")
+
+
+def _swap_for_directory(work: Path) -> None:
+    (work / "d/sub").rename(work / "moved")
+    (work / "victim").rename(work / "d/sub")
+
+
+@pytest.mark.parametrize("swap", [_swap_for_symlink, _swap_for_directory], ids=["symlink", "directory"])
+@pytest.mark.parametrize(
+    ("args", "mode", "at", "tty"),
+    [
+        (["-ri", "d"], 0o644, b"remove d/sub/file? ", False),
+        (["-ri", "d"], 0o644, b"examine files in directory d/sub? ", False),
+        (["-r", "d"], 0o444, b"for d/sub/file? ", True),
+    ],
+    ids=["i-remove", "i-examine", "override"],
+)
+def test_a_directory_swapped_while_a_prompt_waits_is_not_followed(
+    remmy_bin: Path, workdir: Path, swap, args: list[str], mode: int, at: bytes, tty: bool
+) -> None:
+    """A question can wait for minutes, so whatever a yes removes must still be the entry that was asked about:
+    an ancestor renamed away and replaced, by a symlink or by another directory, must not redirect it."""
+    fstree.build(workdir, {"d": {"sub": {"file": "mine"}}, "victim": {"file": "victim"}})
+    os.chmod(workdir / "d/sub/file", mode)
+    os.chmod(workdir / "victim/file", mode)
+    victim = workdir / ("d/sub/file" if swap is _swap_for_directory else "victim/file")
+    prefix = [(b"examine files in directory d? ", None)] if "-ri" in args else []
+    before = [(b"examine files in directory d/sub? ", None)] if at.startswith(b"remove") else []
+
+    rc, err = _drive(remmy_bin, args, workdir, [*prefix, *before, (at, lambda: swap(workdir))], tty=tty)
+
+    assert victim.read_text() == "victim", err
+    assert rc == 1, err
+
+
+def test_a_write_protected_directory_past_path_max_is_asked_about(remmy_bin: Path, workdir: Path) -> None:
+    """The override question for a directory deeper than PATH_MAX is still asked, and a no keeps it."""
+    name = "d" * 200
+    depth = 4096 // (len(name) + 1) + 2
+    fstree.deep_chain(workdir / "t", depth, name, leaf_files=0)
+    fd = os.open(workdir / "t", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for _ in range(depth - 1):
+            fd, parent = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd), fd
+            os.close(parent)
+        os.chmod(name, 0o555, dir_fd=fd)
+    finally:
+        os.close(fd)
+
+    rc, _, err = _run_on_pty(remmy_bin, ["-r", "t"], workdir, b"n\n", 1)
+
+    assert re.search(r"override r-xr-xr-x \S+/\S+ for t/(d+/)+d+\? ", err), err
+    assert (rc, fstree.exists(workdir / "t")) == (1, True), err

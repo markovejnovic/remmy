@@ -30,16 +30,6 @@ void ExaminePrompt::Render(PromptWriter& out) const noexcept {
   std::ignore = cutils::io::Print(out, "examine files in directory {}? ", path);
 }
 
-auto OverrideInfo::From(const struct stat& st) noexcept -> OverrideInfo {
-#if defined(__APPLE__)
-  const std::uint32_t flags = st.st_flags;
-#else
-  const std::uint32_t flags = 0;
-#endif
-  return {
-      .mode = st.st_mode, .uid = st.st_uid, .gid = st.st_gid, .flags = flags};
-}
-
 void OverridePrompt::Render(PromptWriter& out) const noexcept {
   // rm prints strmode's text past the type letter, a space only if
   // strmode left none, then any flags with a space after them.
@@ -117,12 +107,12 @@ auto AnswerLocale::IsYes(char first) const noexcept -> bool {
 }
 
 auto Console::ReadFirstByteRpMatch() noexcept -> Answer {
-  const std::optional<char> first = in_.ReadByte();
+  const std::optional<char> first = ReadByte();
   if (!first) {
     return Answer::kNo;
   }
   if (*first != '\n') {
-    std::ignore = in_.SkipPast('\n');
+    SkipLine();
   }
   if (!locale_) {
     locale_.emplace();
@@ -130,9 +120,23 @@ auto Console::ReadFirstByteRpMatch() noexcept -> Answer {
   return locale_->IsYes(*first) ? Answer::kYes : Answer::kNo;
 }
 
+auto Console::ReadByte() noexcept -> std::optional<char> {
+  if (at_end_) {
+    return std::nullopt;
+  }
+  const std::optional<char> byte = in_.ReadByte();
+  at_end_ = !byte;
+  return byte;
+}
+
+auto Console::SkipLine() noexcept -> bool {
+  at_end_ = at_end_ || !in_.SkipPast('\n');
+  return !at_end_;
+}
+
 auto Console::ReadStrictYesNo() noexcept -> std::optional<Answer> {
-  const std::optional<char> first = in_.ReadByte();
-  const bool line_ended = first == '\n' || (first && in_.SkipPast('\n'));
+  const std::optional<char> first = ReadByte();
+  const bool line_ended = first == '\n' || (first && SkipLine());
 
   if (first == 'y' || first == 'Y') {
     return Answer::kYes;

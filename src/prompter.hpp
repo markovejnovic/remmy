@@ -5,15 +5,13 @@
 #ifndef REMMY_PROMPTER_HPP
 #define REMMY_PROMPTER_HPP
 
-#include <sys/stat.h>
-
 #include <cerrno>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 
-#include "cutils/os/os.hpp"
 #include "dir_node.hpp"
 #include "policy.hpp"
 #include "prompt.hpp"
@@ -56,40 +54,25 @@ class Prompter {
 
  private:
   void Handle(ConfirmRemove& asked) noexcept {
-    asked.parent->PathInto(path_);
-    path_ += '/';
-    path_ += asked.name;
+    AskingAbout(*asked.parent, asked.name);
     if (console_->Ask(RemovePrompt{.path = path_}) == Answer::kYes) {
-      std::string& path = remover_.Scratch();
-      // As in the workers' walk, an entry gone by now is not an error.
-      if (remover_.Logged(asked.parent->UnlinkChild(asked.name, 0, path), "{}",
-                          path) != 0 &&
-          errno != ENOENT) {
-        remover_.Fail(path, errno);
-      }
+      Unlink(*asked.parent, asked.name);
     }
     remover_.Release(asked.parent, *scheduler_);
   }
 
   void Handle(ConfirmOverride& asked) noexcept {
-    asked.parent->PathInto(path_);
-    path_ += '/';
-    path_ += asked.name;
+    AskingAbout(*asked.parent, asked.name);
     if (console_->Ask(OverridePrompt{.info = asked.info, .path = path_}) ==
         Answer::kYes) {
-      std::string& path = remover_.Scratch();
-      if (remover_.Logged(asked.parent->UnlinkChild(asked.name, 0, path), "{}",
-                          path) != 0 &&
-          errno != ENOENT) {
-        remover_.Fail(path, errno);
-      }
+      Unlink(*asked.parent, asked.name);
     }
     remover_.Release(asked.parent, *scheduler_);
   }
 
   void Handle(ConfirmExamine& asked) noexcept {
     asked.dir->PathInto(path_);
-    const Answer answer = AskToEnter();
+    const Answer answer = AskToEnter(*asked.dir);
     // Submitted before this request's token goes, so the scheduler cannot
     // finish in between.
     if (answer == Answer::kYes &&
@@ -105,7 +88,7 @@ class Prompter {
 
   void Handle(ConfirmRmdir& asked) noexcept {
     asked.dir->PathInto(path_);
-    if (AskToRmdir() == Answer::kYes) {
+    if (AskToRmdir(*asked.dir) == Answer::kYes) {
       remover_.RemoveDir(asked.dir);
     }
 
@@ -118,31 +101,44 @@ class Prompter {
 
   void Handle(Drained&) noexcept {}
 
-  /// @brief -i's question before entering the directory at `path_`.
-  [[nodiscard]] auto AskToEnter() noexcept -> Answer {
+  /// @brief Set path_ to the entry `name` of `dir`, as fts prints it.
+  void AskingAbout(const DirNode& dir, std::string_view name) noexcept {
+    dir.PathInto(path_);
+    path_ += '/';
+    path_ += name;
+  }
+
+  /// @brief Remove the entry `name` of `dir`, which path_ names, as a yes
+  ///        asks.
+  ///
+  /// Every failure is reported, an entry gone by now included, as rm does
+  /// without -f: a person said yes to this one.
+  void Unlink(const DirNode& dir, const std::string& name) noexcept {
+    if (remover_.Logged(dir.UnlinkChildVerified(name, 0), "{}", path_) != 0) {
+      remover_.Fail(path_, errno);
+    }
+  }
+
+  /// @brief The question before entering `dir`, whose path is path_.
+  [[nodiscard]] auto AskToEnter(const DirNode& dir) noexcept -> Answer {
     if constexpr (Policy::kAsksEveryEntry) {
       return policy_.AsksToExamine()
                  ? console_->Ask(ExaminePrompt{.path = path_})
                  : console_->Ask(RemovePrompt{.path = path_});
     } else {
-      // Only -i asks before entering; nothing else sends ConfirmExamine.
-      return Answer::kYes;
+      // Legacy mode's override question, asked before entering.
+      return console_->Ask(OverridePrompt{.info = *dir.stat_, .path = path_});
     }
   }
 
-  /// @brief The question before removing the emptied directory at `path_`.
-  [[nodiscard]] auto AskToRmdir() noexcept -> Answer {
+  /// @brief The question before removing the emptied `dir`, whose path is
+  ///        path_.
+  [[nodiscard]] auto AskToRmdir(const DirNode& dir) noexcept -> Answer {
     if constexpr (Policy::kAsksEveryEntry) {
       return console_->Ask(RemovePrompt{.path = path_});
     } else {
-      // rm states the directory as it asks; one gone by now is not asked
-      // about, and its rmdir reports ENOENT as a walk does.
-      struct stat st;
-      if (cutils::os::lstat(path_.c_str(), &st) != 0) {
-        return Answer::kYes;
-      }
-      return console_->Ask(
-          OverridePrompt{.info = OverrideInfo::From(st), .path = path_});
+      // As rm, from the stat taken when the walk found it.
+      return console_->Ask(OverridePrompt{.info = *dir.stat_, .path = path_});
     }
   }
 

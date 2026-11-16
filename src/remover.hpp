@@ -5,9 +5,12 @@
 #ifndef REMMY_REMOVER_HPP
 #define REMMY_REMOVER_HPP
 
+#include <fcntl.h>
+
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -32,14 +35,24 @@ class Remover {
  public:
   using Output = GatedOutput<typename Policy::Gate>;
 
+  /// @brief How RemoveDir reaches a directory.
+  enum class Reach : std::uint8_t {
+    /// By its path: for the walk, which removes moments after it looked.
+    kByPath,
+    /// Through DirNode::OpenVerified: for the prompter, which may remove
+    /// minutes after it looked.
+    kVerified,
+  };
+
   /// @param requests Where questions go; null exactly when Policy never asks.
   /// @note `cli` must outlive this.
-  Remover(const Cli& cli, Policy policy, Output output,
-          RequestList* requests) noexcept
+  Remover(const Cli& cli, Policy policy, Output output, RequestList* requests,
+          Reach reach) noexcept
       : cli_(&cli),
         policy_(policy),
         output_(std::move(output)),
-        requests_(requests) {}
+        requests_(requests),
+        reach_(reach) {}
 
   [[nodiscard]] auto Failures() const noexcept -> std::size_t {
     return failures_;
@@ -88,10 +101,23 @@ class Remover {
     return status;
   }
 
-  /// @brief rmdir the emptied `node`, reporting a failure other than ENOENT.
+  /// @brief rmdir the emptied `node`, reporting a failure: other than
+  ///        ENOENT when the walk does it, any when the prompter does.
   void RemoveDir(const DirNode* node) noexcept {
-    if (RemoveEmptyLogged(node) != 0 && errno != ENOENT) {
-      Fail(scratch_, errno);
+    if (reach_ == Reach::kByPath || node->parent_ == nullptr) {
+      if (RemoveEmptyLogged(node) != 0 &&
+          (errno != ENOENT || reach_ == Reach::kVerified)) {
+        Fail(scratch_, errno);
+      }
+      return;
+    }
+
+    const int status =
+        node->parent_->UnlinkChildVerified(node->name_, AT_REMOVEDIR);
+    const int error = errno;
+    node->PathInto(scratch_);
+    if (Logged(status, "{}", scratch_) != 0) {
+      Fail(scratch_, error);
     }
   }
 
@@ -136,6 +162,7 @@ class Remover {
   [[no_unique_address]] Policy policy_;
   Output output_;
   RequestList* requests_;
+  Reach reach_;
   std::string scratch_;
   std::size_t failures_ = 0;
 };

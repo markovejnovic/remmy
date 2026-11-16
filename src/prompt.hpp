@@ -24,6 +24,7 @@
 #include "cutils/io/stdin_reader.hpp"
 #include "cutils/io/writer_ref.hpp"
 #include "cutils/sync/output_gate.hpp"
+#include "entry_stat.hpp"
 
 namespace remmy {
 
@@ -70,26 +71,13 @@ struct ExaminePrompt {
   void Render(PromptWriter& out) const noexcept;
 };
 
-/// @brief What the override prompt prints about an entry, from its lstat.
-struct OverrideInfo {
-  mode_t mode;
-  uid_t uid;
-  gid_t gid;
-
-  /// @brief chflags(2) flags; 0 on Linux.
-  std::uint32_t flags;
-
-  [[nodiscard]] static auto From(const struct stat& st) noexcept
-      -> OverrideInfo;
-};
-
 /// @brief The question before removing what this process cannot write, or
 ///        what file flags protect, such as
 ///        `override r--r--r-- marko/staff uchg for a? `.
 struct OverridePrompt {
   static constexpr Grammar kGrammar = Grammar::kFirstByteRpMatch;
 
-  OverrideInfo info;
+  EntryStat info;
   std::string_view path;
 
   void Render(PromptWriter& out) const noexcept;
@@ -200,8 +188,18 @@ class Console {
   /// @brief One kStrictYesNo reply, or nullopt to ask again.
   [[nodiscard]] auto ReadStrictYesNo() noexcept -> std::optional<Answer>;
 
+  /// @brief The next byte of stdin, or nullopt once it has ended.
+  [[nodiscard]] auto ReadByte() noexcept -> std::optional<char>;
+
+  /// @brief Skip past the next newline; false if stdin ended first.
+  auto SkipLine() noexcept -> bool;
+
   cutils::io::StdinReader& in_ = cutils::io::stdin_reader;
   cutils::sync::OutputGate gate_;
+
+  /// @brief Set once stdin ends, and never cleared: like stdio's EOF flag in
+  ///        rm, so a terminal typed at after a ^D is not read again.
+  bool at_end_ = false;
 
   /// @brief Loaded on the first answer read through rpmatch, so runs that
   ///        never ask one never pay for it.

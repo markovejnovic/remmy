@@ -3,6 +3,7 @@
 #include "dir_node.hpp"
 
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include "cutils/os/os.hpp"
 
@@ -82,6 +84,16 @@ auto UnlinkPath(const std::string& path, int flags) noexcept -> int {
   return cutils::os::unlinkat(*parent, path.c_str() + slash + 1, flags);
 }
 
+/// @brief How OpenVerified reports a failed step: a component that is now a
+///        symlink or not a directory was replaced, which fts calls ENOENT.
+auto AsReplaced(cutils::os::OpenError error) noexcept -> cutils::os::OpenError {
+  if (error.code == std::errc::too_many_symbolic_link_levels ||
+      error.code == std::errc::not_a_directory) {
+    error.code = std::errc::no_such_file_or_directory;
+  }
+  return error;
+}
+
 }  // namespace
 
 auto DirNode::Parents() const noexcept -> ParentChain {
@@ -132,6 +144,68 @@ auto DirNode::Open(std::string& path_buf) noexcept
   }
   fd_ = *std::move(opened);
   return {};
+}
+
+auto DirNode::OpenVerified() const noexcept
+    -> std::expected<cutils::os::Fd, cutils::os::OpenError> {
+  static constexpr int kFlags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+  static constexpr cutils::os::OpenError kReplaced{
+      .code = std::errc::no_such_file_or_directory, .retryable = false};
+  const auto is_recorded = [](const DirNode& node, const cutils::os::Fd& fd) {
+    struct stat st;
+    return node.stat_ != nullptr && ::fstat(fd.get(), &st) == 0 &&
+           node.stat_->IsSameFile(st);
+  };
+
+  std::vector<const DirNode*> chain;
+  for (const DirNode* node : Parents()) {
+    chain.push_back(node);
+  }
+
+  // The root is the operand as given, so its own components resolve as the
+  // user's shell would; only what the walk found is checked.
+  auto step = chain.rbegin();
+  auto dir = OpenLong((*step)->name_, kFlags);
+  if (!dir) {
+    return std::unexpected(AsReplaced(dir.error()));
+  }
+  if (!is_recorded(**step, *dir)) {
+    return std::unexpected(kReplaced);
+  }
+  for (++step; step != chain.rend(); ++step) {
+    auto next = cutils::os::openat(*dir, (*step)->name_.c_str(), kFlags);
+    if (!next) {
+      return std::unexpected(AsReplaced(next.error()));
+    }
+    if (!is_recorded(**step, *next)) {
+      return std::unexpected(kReplaced);
+    }
+    dir = std::move(next);
+  }
+  return dir;
+}
+
+auto DirNode::OpenChecked() noexcept
+    -> std::expected<void, cutils::os::OpenError> {
+  if (fd_.IsOpen()) {
+    return {};
+  }
+  auto opened = OpenVerified();
+  if (!opened) {
+    return std::unexpected(opened.error());
+  }
+  fd_ = *std::move(opened);
+  return {};
+}
+
+auto DirNode::UnlinkChildVerified(const std::string& name,
+                                  int flags) const noexcept -> int {
+  const auto dir = OpenVerified();
+  if (!dir) {
+    errno = static_cast<int>(dir.error().code);
+    return -1;
+  }
+  return cutils::os::unlinkat(*dir, name.c_str(), flags);
 }
 
 auto DirNode::RemoveEmpty(std::string& scratch) const noexcept -> int {

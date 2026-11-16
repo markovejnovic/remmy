@@ -21,7 +21,7 @@ auto ChoosePolicy(const Options& options, PromptContext context) noexcept
     return AskAll{.mode = context.mode};
   }
   if (!options.force && context.stdin_is_tty) {
-    return AskUnwritable{.is_root = context.is_root};
+    return AskUnwritable{.mode = context.mode, .is_root = context.is_root};
   }
   return NeverAsk{};
 }

@@ -35,7 +35,7 @@ struct ConfirmRemove {
 struct ConfirmOverride {
   DirNode* parent;
   std::string name;
-  OverrideInfo info;
+  EntryStat info;
   cutils::WorkToken token;
 };
 

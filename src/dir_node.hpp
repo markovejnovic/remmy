@@ -9,8 +9,11 @@
 #include <cutils/os/fd.hpp>
 #include <expected>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <string_view>
+
+#include "entry_stat.hpp"
 
 namespace remmy {
 
@@ -87,6 +90,14 @@ struct DirNode {
   ///        it is unwritable or flag-protected, and stdin is a terminal.
   bool needs_override_ = false;
 
+  /// @brief This directory as the walk found it, in runs that may ask; null
+  ///        otherwise.
+  ///
+  /// A question can wait for minutes, and an ancestor renamed or swapped for
+  /// a symlink meanwhile must not redirect what its answer removes. So in
+  /// those runs everything is reached through OpenVerified, never by path.
+  std::unique_ptr<EntryStat> stat_;
+
   explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name)
       : fd_(std::move(fd)),
         parent_(parent),
@@ -115,6 +126,23 @@ struct DirNode {
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
   auto Open(std::string& scratch) noexcept
       -> std::expected<void, cutils::os::OpenError>;
+
+  /// @brief Open this directory by walking down from its root with
+  ///        openat(2), one component at a time, refusing a symlink and any
+  ///        directory other than the one its stat_ records.
+  ///
+  /// Every node on the chain must have stat_. A component that was replaced
+  /// fails with ENOENT, as fts(3) reports it.
+  [[nodiscard]] auto OpenVerified() const noexcept
+      -> std::expected<cutils::os::Fd, cutils::os::OpenError>;
+
+  /// @brief Open, but through OpenVerified.
+  auto OpenChecked() noexcept -> std::expected<void, cutils::os::OpenError>;
+
+  /// @brief unlinkat(2) the entry `name` of this directory, reached through
+  ///        OpenVerified.
+  [[nodiscard]] auto UnlinkChildVerified(const std::string& name,
+                                         int flags) const noexcept -> int;
 
   /// @brief Remove this (by now empty) directory.
   ///

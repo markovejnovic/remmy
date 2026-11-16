@@ -47,6 +47,12 @@ struct NeverAsk {
       const DirNode& /*dir*/) noexcept -> bool {
     return false;
   }
+
+  /// @brief Whether a directory the policy asks about is asked about before
+  ///        it is entered.
+  [[nodiscard]] static constexpr auto AsksBeforeEntering() noexcept -> bool {
+    return false;
+  }
 };
 
 /// @brief -i: ask before every removal and before entering each directory.
@@ -62,6 +68,10 @@ struct AskAll {
   [[nodiscard]] constexpr auto AsksBeforeRmdir(
       const DirNode& /*dir*/) const noexcept -> bool {
     return mode == CommandMode::kUnix2003;
+  }
+
+  [[nodiscard]] static constexpr auto AsksBeforeEntering() noexcept -> bool {
+    return true;
   }
 
   /// @brief Whether entering is asked as "examine files in directory d? "
@@ -82,9 +92,15 @@ struct AskUnwritable {
   static constexpr bool kAsksEveryEntry = false;
   static constexpr bool kReadsAttrs = true;
 
-  [[nodiscard]] static constexpr auto AsksBeforeRmdir(
-      const DirNode& dir) noexcept -> bool {
-    return dir.needs_override_;
+  /// @brief The default asks about an unwritable directory before its
+  ///        rmdir; legacy mode asks before entering it, and not again.
+  [[nodiscard]] constexpr auto AsksBeforeRmdir(
+      const DirNode& dir) const noexcept -> bool {
+    return mode == CommandMode::kUnix2003 && dir.needs_override_;
+  }
+
+  [[nodiscard]] constexpr auto AsksBeforeEntering() const noexcept -> bool {
+    return mode == CommandMode::kLegacy;
   }
 
   /// @brief rm's check(): whether an entry gets the override prompt.
@@ -113,6 +129,7 @@ struct AskUnwritable {
                    : cutils::os::AttrDirReader::Method::kBulk;
   }
 
+  CommandMode mode;
   bool is_root;
 };
 

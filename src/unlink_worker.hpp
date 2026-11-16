@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -74,7 +75,9 @@ class FileUnlinkWorker {
   }
 
   void ProcessTask(DirNode* task, auto& ctx) noexcept {
-    auto open_result = task->Open(path_buffer_);
+    // A run that asks opens a queued directory only by its recorded chain.
+    auto open_result =
+        Policy::kPrompts ? task->OpenChecked() : task->Open(path_buffer_);
     if (!open_result) {
       const cutils::os::OpenError err = open_result.error();
       if (err.retryable) {
@@ -197,7 +200,13 @@ class FileUnlinkWorker {
   void Visit(DirNode* task, const Listed& entry, std::string_view dir_path,
              auto& ctx) noexcept {
     if constexpr (Policy::kAsksEveryEntry) {
-      Ask(task, entry.name, entry.is_dir, ctx);
+      Ask(task, entry, ctx);
+      return;
+    }
+
+    if (entry.is_dir && entry.needs_override &&
+        remover_.Rules().AsksBeforeEntering()) {
+      AskToEnter(task, entry, ctx);
       return;
     }
 
@@ -242,6 +251,12 @@ class FileUnlinkWorker {
     auto* child =
         new DirNode(std::move(child_fd), task, std::string{entry.name});
     child->needs_override_ = entry.needs_override;
+    if constexpr (Policy::kPrompts) {
+      if (!Record(task, entry, *child)) {
+        delete child;
+        return;
+      }
+    }
     task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
     const std::size_t tier =
         child->fd_.IsOpen() ? kRunnable : kAwaitingDescriptor;
@@ -267,28 +282,60 @@ class FileUnlinkWorker {
     task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
     remover_.Requests().Push(ConfirmOverride{.parent = task,
                                              .name = std::string{entry.name},
-                                             .info = OverrideInfo::From(st),
+                                             .info = EntryStat::From(st),
                                              .token = ctx.Hold()});
   }
 
-  /// @brief Hand the entry `name` of `task` to the prompter instead of
-  ///        removing or entering it.
-  void Ask(DirNode* task, std::string_view name, bool is_dir,
-           auto& ctx) noexcept {
-    // Counted on the directory first, as for a scheduled child, so it
-    // outlives the question.
-    task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
-    if (!is_dir) {
-      remover_.Requests().Push(ConfirmRemove{
-          .parent = task, .name = std::string{name}, .token = ctx.Hold()});
+  /// @brief Hand an entry of `task` to the prompter instead of removing or
+  ///        entering it.
+  void Ask(DirNode* task, const Listed& entry, auto& ctx) noexcept {
+    if (!entry.is_dir) {
+      // Counted on the directory first, as for a scheduled child, so it
+      // outlives the question.
+      task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
+      remover_.Requests().Push(ConfirmRemove{.parent = task,
+                                             .name = std::string{entry.name},
+                                             .token = ctx.Hold()});
       return;
     }
+    AskToEnter(task, entry, ctx);
+  }
 
+  /// @brief Hand the directory `entry` of `task` to the prompter before
+  ///        entering it.
+  void AskToEnter(DirNode* task, const Listed& entry, auto& ctx) noexcept {
     // Not opened: a question may wait a long time, and must not hold a
-    // descriptor while it does. Process opens it by path once answered.
-    remover_.Requests().Push(ConfirmExamine{
-        .dir = new DirNode(cutils::os::Fd{}, task, std::string{name}),
-        .token = ctx.Hold()});
+    // descriptor while it does. Process opens it once answered, through
+    // the identity recorded here.
+    auto* child = new DirNode(cutils::os::Fd{}, task, std::string{entry.name});
+    child->needs_override_ = entry.needs_override;
+    if (!Record(task, entry, *child)) {
+      delete child;
+      return;
+    }
+    task->remaining_children_dirs_.fetch_add(1, std::memory_order_relaxed);
+    remover_.Requests().Push(ConfirmExamine{.dir = child, .token = ctx.Hold()});
+  }
+
+  /// @brief Give `child`, the directory `entry` of `task`, its stat_: from
+  ///        its open descriptor if it has one, else from `task`'s.
+  ///
+  /// False, having reported anything but ENOENT, when it cannot be read.
+  [[nodiscard]] auto Record(DirNode* task, const Listed& entry,
+                            DirNode& child) noexcept -> bool {
+    struct stat st;
+    const int status = child.fd_.IsOpen()
+                           ? ::fstat(child.fd_.get(), &st)
+                           : cutils::os::fstatat(task->fd_, entry.c_name, &st,
+                                                 AT_SYMLINK_NOFOLLOW);
+    if (status != 0) {
+      if (errno != ENOENT) {
+        remover_.Fail(task->PathInto(path_buffer_), entry.name, errno);
+      }
+      return false;
+    }
+    child.stat_ = std::make_unique<EntryStat>(EntryStat::From(st));
+    return true;
   }
 
   Remover<Policy> remover_;
