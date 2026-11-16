@@ -148,6 +148,7 @@ cli P_W_x P_r_tree rWv_dir
 cli directories Rv_tree d_and_r_v rfv_missing rv_abs rv_all rv_dot_prefix rv_missing rv_nested_operands
 cli directories rv_symlink_to_dir_slash rv_trailing_slash rv_trailing_slashes rv_tree rv_two_trees
 cli directories v_separate_flags
+cli prompt_once_I I_r_5files_and_dir_y I_r_dir_y
 edges cwd_and_dot_shapes rm_cwd_ancestor_abs rm_cwd_then_relative
 edges misc rv_raw_names_in_tree
 fs missing_and_directories rdv_nested
@@ -158,7 +159,7 @@ _ORDERING_REFUSED = _keys("""
 cli P_W_x x_flag
 cli interactive_i ir_pty_all_y ir_trailing_slash ir_tree_all_y ir_tree_examine_y_rest_n
 cli interactive_i ir_tree_keep_one_file ir_tree_y_then_eof ird_tree irv_tree_all_y
-cli prompt_once_I I_and_i_r I_r_5files_and_dir_y I_r_dir_y
+cli prompt_once_I I_and_i_r
 edges interactive_i irv_special_files_in_tree
 """)
 
