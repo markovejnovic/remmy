@@ -54,13 +54,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <cutils/io/buffered_writer.hpp>
 #include <cutils/io/print.hpp>
 #include <cutils/io/stderr_writer.hpp>
-#include <cutils/io/stdin_reader.hpp>
 #include <cutils/io/stdout_writer.hpp>
 #include <cutils/io/warn.hpp>
-#include <cutils/io/writer_ref.hpp>
 #include <cutils/os/env.hpp>
 #include <cutils/os/fd.hpp>
 #include <cutils/os/limits/fd.hpp>
@@ -68,8 +65,6 @@
 #include <cutils/task_scheduler/task_scheduler.hpp>
 #include <cutils/variant.hpp>
 #include <cutils/workstealing_queue/workstealing_queue.hpp>
-#include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -79,6 +74,7 @@
 
 #include "cli.hpp"
 #include "dir_node.hpp"
+#include "prompt.hpp"
 
 namespace {
 
@@ -324,74 +320,6 @@ class FileUnlinkWorker {
 using Scheduler =
     cutils::TaskScheduler<FileUnlinkWorker, FileUnlinkWorker::kRanks>;
 
-/// @brief Asks BSD rm's -I question when it would; true to go ahead.
-///
-/// rm asks once when, among the operands that exist (lstat(2)), there is a
-/// directory under -r or -R, or more than three in all. Only the first
-/// character of each answer line counts; anything but y or n asks again, and
-/// end of input declines.
-auto ConfirmPromptOnce(std::span<char* const> operands, bool recursive) noexcept
-    -> bool {
-  static constexpr std::size_t kMaxSilentOperands = 3;
-  static constexpr std::size_t kPromptBuffer = 256;
-  auto& in = cutils::io::stdin_reader;
-
-  std::size_t dirs = 0;
-  std::size_t files = 0;
-  std::string_view dir_name;
-  for (const char* path : operands) {
-    struct stat path_stat;
-    if (cutils::os::lstat(path, &path_stat) != 0) {
-      continue;
-    }
-    if (S_ISDIR(path_stat.st_mode)) {
-      ++dirs;
-      dir_name = path;
-    } else {
-      ++files;
-    }
-  }
-
-  const bool ask_recursive = recursive && dirs > 0;
-  if (!ask_recursive && dirs + files <= kMaxSilentOperands) {
-    return true;
-  }
-
-  while (true) {
-    cutils::io::InlineBufferedWriter<
-        cutils::io::WriterRef<decltype(cutils::io::stderr_writer)>,
-        kPromptBuffer>
-        line(cutils::io::stderr_writer);
-    if (ask_recursive) {
-      std::ignore = cutils::io::Print(line, "recursively remove");
-      if (dirs == 1) {
-        std::ignore = cutils::io::Print(line, " {}", dir_name);
-      } else {
-        std::ignore = cutils::io::Print(line, " {} dirs", dirs);
-      }
-      if (files == 1) {
-        std::ignore = cutils::io::Print(line, " and 1 file");
-      } else if (files > 1) {
-        std::ignore = cutils::io::Print(line, " and {} files", files);
-      }
-    } else {
-      std::ignore = cutils::io::Print(line, "remove {} files", dirs + files);
-    }
-    std::ignore = cutils::io::Print(line, "? ");
-    std::ignore = line.Flush();
-
-    const std::optional<char> first = in.ReadByte();
-    const bool line_ended = first == '\n' || (first && in.SkipPast('\n'));
-
-    if (first == 'y' || first == 'Y') {
-      return true;
-    }
-    if (first == 'n' || first == 'N' || !line_ended) {
-      return false;
-    }
-  }
-}
-
 /// @brief Run as unlink(1).
 ///
 /// BSD rm has this mode wherein it special-cases its behavior based on how its
@@ -431,9 +359,13 @@ auto SeedRoot(Scheduler& scheduler, cutils::os::Fd dirfd, std::string_view path)
 }
 
 auto RunRm(const remmy::Cli& cli) -> int {
-  if (cli.Options().prompt_once &&
-      !ConfirmPromptOnce(cli.Operands(), cli.Options().recursive)) {
-    return 1;
+  remmy::Console console;
+  if (cli.Options().prompt_once) {
+    if (const auto prompt =
+            remmy::BulkPromptFor(cli.Operands(), cli.Options().recursive);
+        prompt && console.Ask(*prompt) == remmy::Answer::kNo) {
+      return 1;
+    }
   }
 
   const bool force = cli.Options().force;
