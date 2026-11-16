@@ -12,7 +12,8 @@ add_compile_options(-fno-exceptions)
 
 add_library(cutils STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src/os/limits/fd.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/os/os.cpp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/os/os.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/os/wait_on_address.cpp")
 add_library(cutils::cutils ALIAS cutils)
 target_compile_features(cutils PUBLIC cxx_std_26)
 target_link_libraries(cutils PUBLIC Threads::Threads)
