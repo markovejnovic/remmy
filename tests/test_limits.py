@@ -43,6 +43,34 @@ def test_starved_fd_limit_fails_cleanly(run: Runner, workdir: Path) -> None:
         check.is_true(res.errors, res)
 
 
+@pytest.mark.parametrize("fd_limit", [16, 20])
+def test_unsearchable_dirs_under_tight_fd_limit(run: Runner, workdir: Path, fd_limit: int) -> None:
+    """Out of descriptors, a 0444 directory's subdirectories are parked unopened.
+
+    rm still reports each such directory once and leaves it alone; none of its
+    children is reported, and it is not rmdir'd.
+    """
+    n = 60
+    fstree.build(workdir, {"d": {f"s{i}": {"t": {"u": {}}} for i in range(n)}})
+    for i in range(n):
+        os.chmod(workdir / f"d/s{i}", 0o444)
+
+    res = run("-r", "d", threads=4, fd_limit=fd_limit)
+
+    with check:
+        assert res.returncode == 1, res
+    with check:
+        assert sorted(res.errors) == sorted(
+            [f"remmy: d/s{i}: Permission denied" for i in range(n)] + ["remmy: d: Directory not empty"]
+        ), res
+    for i in range(n):
+        os.chmod(workdir / f"d/s{i}", 0o755)
+    with check:
+        assert fstree.listing(workdir) == (
+            {"d"} | {f"d/s{i}" for i in range(n)} | {f"d/s{i}/t" for i in range(n)} | {f"d/s{i}/t/u" for i in range(n)}
+        )
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("multiple", [2, 5])
 def test_tree_deeper_than_path_max(run: Runner, workdir: Path, threads: int, multiple: int) -> None:
