@@ -66,19 +66,6 @@ GAPS = {
         _OPERAND_ORDER,
         _OPERAND_ORDER,
     ),
-    "walk-semantics": Gap(
-        "fts(3) behaviour inside a walk: a directory that can be listed but not searched (0444) is reported once as "
-        "'<dir>: Permission denied' and neither emptied nor rmdir'd; names a listing returns that then vanish on open "
-        "(the HFS+ private metadata directories at a volume root) are skipped silently, so a mount point ends with "
-        "only 'Resource busy'; an operand 'l/' with l pointing at '.' or '..' walks through the link and reports the "
-        "final rmdir's ENOENT.",
-        _keys("""
-edges mount_operands r_mountpoint_operand rx_empty_nested_mount
-edges symlinks_to_directories r_symlink_to_dot_slash r_symlink_to_dotdot_slash
-fs mount_points mountpoint_r_no_x x_operand_is_mount
-fs permissions r_subdir_0444
-"""),
-    ),
     "prompt-interactive": Gap(
         "-i asks 'remove <path>? ' on stderr for each operand, reads one line from stdin (pipe, /dev/null or tty) and "
         "takes it through rpmatch(3) in the current locale ('j' under de_DE; EOF and anything unrecognised mean no; a "
@@ -131,20 +118,17 @@ fs permissions file_0444_pty_no file_0444_pty_yes tree_0444_files_r_pty
     "flags-pwx": Gap(
         "-P still opens a regular file for writing before removing it, so an unwritable one fails with 'Permission "
         "denied' even under -f; -W (without -r) undeletes instead of removing: an existing name fails with 'File "
-        "exists', a missing one with 'Operation not permitted', also under -f and -i; -x does not descend into a "
-        "directory on another device, so the mount point is left for rmdir to fail with 'Resource busy'.",
+        "exists', a missing one with 'Operation not permitted', also under -f and -i.",
         _keys("""
 cli P_W_x P_f_ro P_ro_devnull P_ro_pty W_dir W_emptystring W_missing W_nonexist Wf_nonexist Wv dW_missing fW_missing
-cli usage_and_getopt all_flags all_flags_valid_no_W
 edges P_and_W P_mode_000 iW_existing iW_missing
-fs mount_points x_mountpoint_r
 """),
     ),
 }
 
 # Cases remmy runs whose line order alone differs; it can match rm's by chance.
 _ORDERING_WALKED = _keys("""
-cli P_W_x P_r_tree rWv_dir
+cli P_W_x P_r_tree rWv_dir x_flag
 cli directories Rv_tree d_and_r_v rfv_missing rv_abs rv_all rv_dot_prefix rv_missing rv_nested_operands
 cli directories rv_symlink_to_dir_slash rv_trailing_slash rv_trailing_slashes rv_tree rv_two_trees
 cli directories v_separate_flags
@@ -153,9 +137,8 @@ edges misc rv_raw_names_in_tree
 fs missing_and_directories rdv_nested
 fs recursion_and_order fs_rv_tree
 """)
-# Cases using -i, -I or -x, which remmy refuses for now: they fail every time.
+# Cases using -i or -I, which remmy refuses for now: they fail every time.
 _ORDERING_REFUSED = _keys("""
-cli P_W_x x_flag
 cli interactive_i ir_pty_all_y ir_trailing_slash ir_tree_all_y ir_tree_examine_y_rest_n
 cli interactive_i ir_tree_keep_one_file ir_tree_y_then_eof ird_tree irv_tree_all_y
 cli prompt_once_I I_and_i_r I_r_5files_and_dir_y I_r_dir_y

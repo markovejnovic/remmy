@@ -10,10 +10,27 @@
 #include <expected>
 #include <iterator>
 #include <string>
+#include <string_view>
 
 namespace remmy {
 
 struct DirNode;
+class Walk;
+
+class ReportOnce {
+ public:
+  /// @brief True for the one caller that gets to report.
+  [[nodiscard]] auto Claim() noexcept -> bool {
+    return !claimed_.exchange(true, std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] auto Claimed() const noexcept -> bool {
+    return claimed_.load(std::memory_order_relaxed);
+  }
+
+ private:
+  std::atomic<bool> claimed_{false};
+};
 
 template <typename NodeT>
 class BasicParentChain;
@@ -37,6 +54,16 @@ struct DirNode {
   /// have a limit to how many directories can be open), then we have no choice
   /// but to not open the directory and just remember to open it later.
   cutils::os::Fd fd_;
+
+  /// @brief Whether the directory is to be left in place: it could be listed
+  ///        but not searched, so none of its entries could be removed, and rm
+  ///        reports it once and does not try to rmdir it.
+  ///
+  /// Set by the worker that scans the directory, or by one that fails to open
+  /// a child of it, and read by whichever worker drops its last reference
+  /// (see `remaining_children_dirs_`). Whoever sets it first reports the
+  /// directory. It sits in the padding after `fd_`, so it costs no space.
+  ReportOnce unsearchable_;
 
   //// @brief Pointer to the parent DirNode.
   ///
@@ -82,15 +109,24 @@ struct DirNode {
   /// This also acts as the refcount which keeps the DirNode alive in memory.
   std::atomic<std::uint32_t> remaining_children_dirs_;
 
-  explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name)
+  /// @brief The walk that found this directory.
+  const Walk& walk_;
+
+  explicit DirNode(cutils::os::Fd fd, DirNode* parent, std::string name,
+                   const Walk& walk)
       : fd_(std::move(fd)),
         parent_(parent),
         name_(std::move(name)),
-        remaining_children_dirs_(1) {}
+        remaining_children_dirs_(1),
+        walk_(walk) {}
 
-  /// @brief Walk the parent chain to build the full absolute path into the
-  ///        given output buffer.
-  auto PathInto(std::string& out) const noexcept -> const char*;
+  /// @brief Walk the parent chain to build the full path into the given
+  ///        output buffer.
+  ///
+  /// @param root When not empty, stands in for the name of the root at the
+  ///             top of the chain: "." makes the path relative to the root.
+  auto PathInto(std::string& out, std::string_view root = {}) const noexcept
+      -> const char*;
 
   /// @brief Get a read-only range over this node and its ancestors.
   ///
@@ -104,8 +140,8 @@ struct DirNode {
 
   /// @brief Try to open this DirNode.
   ///
-  /// @param path_buf A scratch buffer which this utility uses to compute
-  ///                 an absolute path.
+  /// @param scratch A scratch buffer which this utility uses to compute
+  ///                the path to open.
   ///
   /// If this succeeds, it guarantees [`fd_.IsOpen()`].
   auto Open(std::string& scratch) noexcept
@@ -113,8 +149,12 @@ struct DirNode {
 
   /// @brief Remove this (by now empty) directory.
   ///
-  /// @param scratch A scratch buffer; it holds this node's path afterwards.
+  /// @param scratch A scratch buffer for the path handed to the kernel.
   auto RemoveEmpty(std::string& scratch) const noexcept -> int;
+
+  /// @brief Looks this directory up without following it: 0 when that
+  ///        works, or else errno.
+  auto Lookup(std::string& scratch) const noexcept -> int;
 };
 
 /// @brief A range over a DirNode and its ancestors, walking `parent_` to the

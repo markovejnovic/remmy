@@ -6,9 +6,12 @@
 #include <cstddef>
 #include <expected>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string_view>
 #include <variant>
+
+#include "operand.hpp"
 
 namespace remmy {
 
@@ -127,9 +130,9 @@ struct Cli {
 
   /// @brief Arguments considered as operands, ie. all the things that aren't
   ///        options as well as any things that come after `--`.
-  [[nodiscard]] constexpr auto Operands() const noexcept
-      -> std::span<char* const> {
-    return operands_;
+  [[nodiscard]] constexpr auto Operands() const noexcept {
+    return operands_ | std::views::transform(
+                           [](const char* path) { return Operand(path); });
   }
 
   /// @brief See Argv::ProgramName.
